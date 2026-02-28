@@ -1,4 +1,4 @@
-name: Build libcurl
+name: Build curl
 
 on:
   workflow_dispatch:
@@ -16,71 +16,63 @@ jobs:
         with:
           arch: ${{ github.event.inputs.arch || 'x64' }}
       
-      - name: Build everything
+      - name: Build
         shell: cmd
         run: |
           cd C:\
-          mkdir build install
-          cd build
+          mkdir install
+          cd install
           
-          REM zlib 1.3.1
+          REM zlib
           git clone --depth 1 --branch v1.3.1 https://github.com/madler/zlib.git
           cd zlib
           nmake /f win32\Makefile.msc
-          copy *.lib ..\..\install\
-          copy *.h ..\..\install\
+          copy *.lib ..\
+          copy *.h ..\
           cd ..
           
-          REM OpenSSL 3.0.13
+          REM OpenSSL
           if "${{ github.event.inputs.arch }}"=="x64" (
             curl -L -o openssl.exe https://slproweb.com/download/Win64OpenSSL-3_0_13.exe
           ) else (
             curl -L -o openssl.exe https://slproweb.com/download/Win32OpenSSL-3_0_13.exe
           )
-          openssl.exe /silent /verysilent /dir=C:\install
+          openssl.exe /silent /verysilent /dir=%CD%
           
-          REM libssh2 1.11.0
+          REM libssh2
           git clone --depth 1 --branch libssh2-1.11.0 https://github.com/libssh2/libssh2.git
           cd libssh2
           mkdir b && cd b
-          cmake .. -G "Visual Studio 17 2022" -A %1 -DCMAKE_INSTALL_PREFIX=C:\install -DCRYPTO_BACKEND=OpenSSL -DOPENSSL_ROOT_DIR=C:\install
+          cmake .. -G "Visual Studio 17 2022" -A ${{ github.event.inputs.arch == 'x64' && 'x64' || 'Win32' }} -DCMAKE_INSTALL_PREFIX=%CD%\..\.. -DCRYPTO_BACKEND=OpenSSL -DOPENSSL_ROOT_DIR=%CD%\..\..
           cmake --build . --config Release
           cmake --install .
           cd ..\..
           
-          REM curl latest
+          REM curl static
           git clone --depth 1 https://github.com/curl/curl.git
           cd curl
-          
-          REM static
           mkdir bs && cd bs
-          cmake .. -G "Visual Studio 17 2022" -A %1 -DCMAKE_INSTALL_PREFIX=C:\install\static -DBUILD_SHARED_LIBS=OFF -DCMAKE_USE_OPENSSL=ON -DCMAKE_USE_LIBSSH2=ON -DUSE_ZLIB=ON -DOPENSSL_ROOT_DIR=C:\install
+          cmake .. -G "Visual Studio 17 2022" -A ${{ github.event.inputs.arch == 'x64' && 'x64' || 'Win32' }} -DCMAKE_INSTALL_PREFIX=%CD%\..\..\static -DBUILD_SHARED_LIBS=OFF -DCMAKE_USE_OPENSSL=ON -DCMAKE_USE_LIBSSH2=ON -DUSE_ZLIB=ON -DOPENSSL_ROOT_DIR=%CD%\..\..
           cmake --build . --config Release
           cmake --install .
           cd ..
           
-          REM shared
+          REM curl shared
           mkdir bd && cd bd
-          cmake .. -G "Visual Studio 17 2022" -A %1 -DCMAKE_INSTALL_PREFIX=C:\install\shared -DBUILD_SHARED_LIBS=ON -DCMAKE_USE_OPENSSL=ON -DCMAKE_USE_LIBSSH2=ON -DUSE_ZLIB=ON -DOPENSSL_ROOT_DIR=C:\install
+          cmake .. -G "Visual Studio 17 2022" -A ${{ github.event.inputs.arch == 'x64' && 'x64' || 'Win32' }} -DCMAKE_INSTALL_PREFIX=%CD%\..\..\shared -DBUILD_SHARED_LIBS=ON -DCMAKE_USE_OPENSSL=ON -DCMAKE_USE_LIBSSH2=ON -DUSE_ZLIB=ON -DOPENSSL_ROOT_DIR=%CD%\..\..
           cmake --build . --config Release
           cmake --install .
           cd ..\..
           
           REM package
-          cd C:\
-          for /f %%i in ('git -C build\curl describe --tags --abbrev=0') do set VER=%%i
+          for /f %%i in ('git -C curl describe --tags --abbrev=0 2^>nul') do set VER=%%i
           if "%VER%"=="" set VER=latest
           set VER=%VER:curl-=%
           
-          mkdir output
-          xcopy /e install\static output\static\
-          xcopy /e install\shared output\shared\
-          
-          cd output
-          tar -acf ..\libcurl-%VER%-${{ github.event.inputs.arch }}-static.zip static
-          tar -acf ..\libcurl-%VER%-${{ github.event.inputs.arch }}-shared.zip shared
+          tar -acf libcurl-%VER%-${{ github.event.inputs.arch }}-static.zip static
+          tar -acf libcurl-%VER%-${{ github.event.inputs.arch }}-shared.zip shared
           
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          path: C:\libcurl-*.zip
+          path: C:\install\*.zip
