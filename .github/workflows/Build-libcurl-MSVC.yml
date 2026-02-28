@@ -20,7 +20,9 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        arch: [${{ github.event.inputs.arch || 'x64' }}]
+        arch: [x64, x86]
+      # 如果手动触发，只构建选择的架构
+      max-parallel: 1
     
     steps:
       - name: Checkout
@@ -29,15 +31,16 @@ jobs:
       - name: Setup VS env
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: ${{ matrix.arch == 'x64' && 'x64' || 'x86' }}
+          arch: ${{ matrix.arch }}
 
       - name: Create build dir
+        shell: pwsh
         run: |
-          mkdir C:\curl-build -Force
-          mkdir C:\curl-build\install -Force
+          New-Item -ItemType Directory -Path C:\curl-build -Force
+          New-Item -ItemType Directory -Path C:\curl-build\install -Force
 
-      # zlib 1.3.1
-      - name: Build zlib
+      - name: Build zlib 1.3.1
+        shell: cmd
         run: |
           cd C:\curl-build
           git clone --depth 1 --branch v1.3.1 https://github.com/madler/zlib.git
@@ -48,19 +51,20 @@ jobs:
           copy zlib.h ..\install\
           copy zconf.h ..\install\
 
-      # OpenSSL 3.0.13 - 使用预编译包加速
-      - name: Download OpenSSL
+      - name: Download OpenSSL 3.0.13
+        shell: pwsh
         run: |
           cd C:\curl-build
-          if "${{ matrix.arch }}"=="x64" (
-            curl -L -o openssl.exe https://slproweb.com/download/Win64OpenSSL-3_0_13.exe
-          ) else (
-            curl -L -o openssl.exe https://slproweb.com/download/Win32OpenSSL-3_0_13.exe
-          )
-          .\openssl.exe /silent /verysilent /sp- /suppressmsgboxes /dir=C:\curl-build\install
+          if ("${{ matrix.arch }}" -eq "x64") {
+            $url = "https://slproweb.com/download/Win64OpenSSL-3_0_13.exe"
+          } else {
+            $url = "https://slproweb.com/download/Win32OpenSSL-3_0_13.exe"
+          }
+          Invoke-WebRequest -Uri $url -OutFile openssl.exe
+          Start-Process -FilePath .\openssl.exe -ArgumentList "/silent", "/verysilent", "/dir=C:\curl-build\install" -Wait
 
-      # libssh2 1.11.0
-      - name: Build libssh2
+      - name: Build libssh2 1.11.0
+        shell: cmd
         run: |
           cd C:\curl-build
           git clone --depth 1 --branch libssh2-1.11.0 https://github.com/libssh2/libssh2.git
@@ -77,66 +81,88 @@ jobs:
           cmake --build . --config Release
           cmake --install .
 
-      # libcurl latest
-      - name: Build libcurl
+      - name: Build libcurl latest (static)
+        shell: cmd
         run: |
           cd C:\curl-build
           git clone --depth 1 https://github.com/curl/curl.git
           cd curl
-          mkdir build
-          cd build
-          
-          REM 静态库
+          mkdir build-static
+          cd build-static
           cmake .. -G "Visual Studio 17 2022" -A ${{ matrix.arch == 'x64' && 'x64' || 'Win32' }} ^
             -DCMAKE_INSTALL_PREFIX=C:\curl-build\install\static ^
             -DBUILD_SHARED_LIBS=OFF ^
             -DCMAKE_USE_OPENSSL=ON ^
             -DCMAKE_USE_LIBSSH2=ON ^
             -DUSE_ZLIB=ON ^
-            -DOPENSSL_ROOT_DIR=C:\curl-build\install
+            -DOPENSSL_ROOT_DIR=C:\curl-build\install ^
+            -DHTTP_ONLY=OFF ^
+            -DENABLE_IPV6=ON
           cmake --build . --config Release
           cmake --install .
-          
-          REM 清理
-          Remove-Item -Path * -Recurse -Force
-          
-          REM 动态库
+
+      - name: Build libcurl latest (shared)
+        shell: cmd
+        run: |
+          cd C:\curl-build\curl
+          mkdir build-shared
+          cd build-shared
           cmake .. -G "Visual Studio 17 2022" -A ${{ matrix.arch == 'x64' && 'x64' || 'Win32' }} ^
             -DCMAKE_INSTALL_PREFIX=C:\curl-build\install\shared ^
             -DBUILD_SHARED_LIBS=ON ^
             -DCMAKE_USE_OPENSSL=ON ^
             -DCMAKE_USE_LIBSSH2=ON ^
             -DUSE_ZLIB=ON ^
-            -DOPENSSL_ROOT_DIR=C:\curl-build\install
+            -DOPENSSL_ROOT_DIR=C:\curl-build\install ^
+            -DHTTP_ONLY=OFF ^
+            -DENABLE_IPV6=ON
           cmake --build . --config Release
           cmake --install .
 
-      # 收集产物
-      - name: Collect files
+      - name: Get version
+        shell: pwsh
+        id: version
+        run: |
+          cd C:\curl-build\curl
+          $tag = git describe --tags --abbrev=0 2>$null
+          if ($tag) {
+            $version = $tag.TrimStart('curl-')
+          } else {
+            $version = "latest"
+          }
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Package static libs
+        shell: pwsh
         run: |
           cd C:\curl-build
-          $version = (git -C curl describe --tags --abbrev=0).TrimStart('curl-')
-          if (-not $version) { $version = "latest" }
+          $ver = "${{ steps.version.outputs.version }}"
+          $arch = "${{ matrix.arch }}"
           
-          mkdir output
+          New-Item -ItemType Directory -Path package-static -Force
+          Copy-Item -Path install\static\lib\* -Destination package-static\ -Force
+          Copy-Item -Path install\*.h -Destination package-static\ -Force
+          Copy-Item -Path install\curl\*.h -Destination package-static\ -Force -Recurse
           
-          # 静态库
-          mkdir output\static\lib -Force
-          mkdir output\static\include -Force
-          copy install\static\lib\*.lib output\static\lib\
-          copy install\*.h output\static\include\
+          Compress-Archive -Path package-static\* -DestinationPath libcurl-${ver}-${arch}-static.zip
+
+      - name: Package shared libs
+        shell: pwsh
+        run: |
+          cd C:\curl-build
+          $ver = "${{ steps.version.outputs.version }}"
+          $arch = "${{ matrix.arch }}"
           
-          # 动态库
-          mkdir output\shared\lib -Force
-          mkdir output\shared\bin -Force
-          mkdir output\shared\include -Force
-          copy install\shared\lib\*.lib output\shared\lib\
-          copy install\shared\bin\*.dll output\shared\bin\
-          copy install\*.h output\shared\include\
+          New-Item -ItemType Directory -Path package-shared -Force
+          New-Item -ItemType Directory -Path package-shared\lib -Force
+          New-Item -ItemType Directory -Path package-shared\bin -Force
           
-          # 打包
-          Compress-Archive -Path output\static\* -DestinationPath libcurl-${version}-${{ matrix.arch }}-static.zip
-          Compress-Archive -Path output\shared\* -DestinationPath libcurl-${version}-${{ matrix.arch }}-shared.zip
+          Copy-Item -Path install\shared\lib\*.lib -Destination package-shared\lib\ -Force
+          Copy-Item -Path install\shared\bin\*.dll -Destination package-shared\bin\ -Force
+          Copy-Item -Path install\*.h -Destination package-shared\ -Force
+          Copy-Item -Path install\curl\*.h -Destination package-shared\ -Force -Recurse
+          
+          Compress-Archive -Path package-shared\* -DestinationPath libcurl-${ver}-${arch}-shared.zip
 
       - name: Upload static
         uses: actions/upload-artifact@v4
@@ -156,17 +182,13 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
-    
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
-      
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*.zip
-          draft: false
-          prerelease: false
