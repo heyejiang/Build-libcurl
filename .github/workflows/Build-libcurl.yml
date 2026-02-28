@@ -11,27 +11,33 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: cmd
+        working-directory: D:\a\Build-libcurl\Build-libcurl
+    
     steps:
-      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup VS env
+        uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: ${{ github.event.inputs.arch }}
       
       - name: Create directories
-        shell: cmd
         run: |
-          cd C:\
-          if exist curl rmdir /s /q curl
-          mkdir curl
-          cd curl
+          cd D:\a\Build-libcurl\Build-libcurl
+          if exist build rmdir /s /q build
+          mkdir build
+          cd build
           mkdir install
-          mkdir deps
           echo Current directory: %CD%
 
       - name: Build zlib
-        shell: cmd
         run: |
-          cd C:\curl
-          git clone --depth 1 https://github.com/madler/zlib.git
+          cd D:\a\Build-libcurl\Build-libcurl\build
+          git clone --depth 1 --branch v1.3.1 https://github.com/madler/zlib.git
           cd zlib
           nmake /f win32\Makefile.msc clean
           nmake /f win32\Makefile.msc
@@ -41,9 +47,8 @@ jobs:
           dir ..\install
 
       - name: Install OpenSSL
-        shell: cmd
         run: |
-          cd C:\curl
+          cd D:\a\Build-libcurl\Build-libcurl\build
           if "${{ github.event.inputs.arch }}"=="x64" (
             echo Downloading OpenSSL 64-bit...
             curl -L -o openssl.exe https://slproweb.com/download/Win64OpenSSL-3_5_5.exe
@@ -51,25 +56,24 @@ jobs:
             echo Downloading OpenSSL 32-bit...
             curl -L -o openssl.exe https://slproweb.com/download/Win32OpenSSL-3_5_5.exe
           )
-          echo Installing OpenSSL to %CD%\install...
+          echo Installing OpenSSL to install directory...
           openssl.exe /silent /verysilent /dir=%CD%\install
-          dir install\
+          dir install
 
       - name: Build libssh2
-        shell: cmd
         run: |
-          cd C:\curl
-          git clone --depth 1 https://github.com/libssh2/libssh2.git
+          cd D:\a\Build-libcurl\Build-libcurl\build
+          git clone --depth 1 --branch libssh2-1.11.0 https://github.com/libssh2/libssh2.git
           cd libssh2
           mkdir build
           cd build
           echo Configuring libssh2...
           cmake .. -G "Visual Studio 17 2022" -A ${{ github.event.inputs.arch == 'x64' && 'x64' || 'Win32' }} ^
-            -DCMAKE_INSTALL_PREFIX=C:\curl\install ^
+            -DCMAKE_INSTALL_PREFIX=D:\a\Build-libcurl\Build-libcurl\build\install ^
             -DCRYPTO_BACKEND=OpenSSL ^
-            -DOPENSSL_ROOT_DIR=C:\curl\install ^
-            -DOPENSSL_INCLUDE_DIR=C:\curl\install\include ^
-            -DOPENSSL_LIBRARIES="C:\curl\install\lib\libssl.lib;C:\curl\install\lib\libcrypto.lib" ^
+            -DOPENSSL_ROOT_DIR=D:\a\Build-libcurl\Build-libcurl\build\install ^
+            -DOPENSSL_INCLUDE_DIR=D:\a\Build-libcurl\Build-libcurl\build\install\include ^
+            -DOPENSSL_LIBRARIES="D:\a\Build-libcurl\Build-libcurl\build\install\lib\libssl.lib;D:\a\Build-libcurl\Build-libcurl\build\install\lib\libcrypto.lib" ^
             -DBUILD_SHARED_LIBS=ON ^
             -DBUILD_EXAMPLES=OFF ^
             -DBUILD_TESTING=OFF
@@ -77,31 +81,34 @@ jobs:
           cmake --build . --config Release
           echo Installing libssh2...
           cmake --install .
-          dir C:\curl\install
+          dir D:\a\Build-libcurl\Build-libcurl\build\install
+
+      - name: Clone curl
+        run: |
+          cd D:\a\Build-libcurl\Build-libcurl\build
+          git clone --depth 1 https://github.com/curl/curl.git
+          dir curl
 
       - name: Build curl static
-        shell: cmd
         run: |
-          cd C:\curl
-          git clone --depth 1 https://github.com/curl/curl.git
-          cd curl
+          cd D:\a\Build-libcurl\Build-libcurl\build\curl
           mkdir build-static
           cd build-static
           echo Configuring curl static...
           cmake .. -G "Visual Studio 17 2022" -A ${{ github.event.inputs.arch == 'x64' && 'x64' || 'Win32' }} ^
-            -DCMAKE_INSTALL_PREFIX=C:\curl\static ^
+            -DCMAKE_INSTALL_PREFIX=D:\a\Build-libcurl\Build-libcurl\build\static ^
             -DBUILD_SHARED_LIBS=OFF ^
             -DCMAKE_USE_OPENSSL=ON ^
             -DCMAKE_USE_LIBSSH2=ON ^
             -DUSE_ZLIB=ON ^
-            -DOPENSSL_ROOT_DIR=C:\curl\install ^
-            -DOPENSSL_INCLUDE_DIR=C:\curl\install\include ^
-            -DOPENSSL_CRYPTO_LIBRARY=C:\curl\install\lib\libcrypto.lib ^
-            -DOPENSSL_SSL_LIBRARY=C:\curl\install\lib\libssl.lib ^
-            -DLIBSSH2_LIBRARY=C:\curl\install\lib\libssh2.lib ^
-            -DLIBSSH2_INCLUDE_DIR=C:\curl\install\include ^
-            -DZLIB_LIBRARY=C:\curl\install\zlib.lib ^
-            -DZLIB_INCLUDE_DIR=C:\curl\install ^
+            -DOPENSSL_ROOT_DIR=D:\a\Build-libcurl\Build-libcurl\build\install ^
+            -DOPENSSL_INCLUDE_DIR=D:\a\Build-libcurl\Build-libcurl\build\install\include ^
+            -DOPENSSL_CRYPTO_LIBRARY=D:\a\Build-libcurl\Build-libcurl\build\install\lib\libcrypto.lib ^
+            -DOPENSSL_SSL_LIBRARY=D:\a\Build-libcurl\Build-libcurl\build\install\lib\libssl.lib ^
+            -DLIBSSH2_LIBRARY=D:\a\Build-libcurl\Build-libcurl\build\install\lib\libssh2.lib ^
+            -DLIBSSH2_INCLUDE_DIR=D:\a\Build-libcurl\Build-libcurl\build\install\include ^
+            -DZLIB_LIBRARY=D:\a\Build-libcurl\Build-libcurl\build\install\zlib.lib ^
+            -DZLIB_INCLUDE_DIR=D:\a\Build-libcurl\Build-libcurl\build\install ^
             -DHTTP_ONLY=OFF ^
             -DENABLE_IPV6=ON ^
             -DBUILD_CURL_EXE=OFF
@@ -109,29 +116,28 @@ jobs:
           cmake --build . --config Release
           echo Installing curl static...
           cmake --install .
-          dir C:\curl\static
+          dir D:\a\Build-libcurl\Build-libcurl\build\static
 
       - name: Build curl shared
-        shell: cmd
         run: |
-          cd C:\curl\curl
+          cd D:\a\Build-libcurl\Build-libcurl\build\curl
           mkdir build-shared
           cd build-shared
           echo Configuring curl shared...
           cmake .. -G "Visual Studio 17 2022" -A ${{ github.event.inputs.arch == 'x64' && 'x64' || 'Win32' }} ^
-            -DCMAKE_INSTALL_PREFIX=C:\curl\shared ^
+            -DCMAKE_INSTALL_PREFIX=D:\a\Build-libcurl\Build-libcurl\build\shared ^
             -DBUILD_SHARED_LIBS=ON ^
             -DCMAKE_USE_OPENSSL=ON ^
             -DCMAKE_USE_LIBSSH2=ON ^
             -DUSE_ZLIB=ON ^
-            -DOPENSSL_ROOT_DIR=C:\curl\install ^
-            -DOPENSSL_INCLUDE_DIR=C:\curl\install\include ^
-            -DOPENSSL_CRYPTO_LIBRARY=C:\curl\install\lib\libcrypto.lib ^
-            -DOPENSSL_SSL_LIBRARY=C:\curl\install\lib\libssl.lib ^
-            -DLIBSSH2_LIBRARY=C:\curl\install\lib\libssh2.lib ^
-            -DLIBSSH2_INCLUDE_DIR=C:\curl\install\include ^
-            -DZLIB_LIBRARY=C:\curl\install\zlib.lib ^
-            -DZLIB_INCLUDE_DIR=C:\curl\install ^
+            -DOPENSSL_ROOT_DIR=D:\a\Build-libcurl\Build-libcurl\build\install ^
+            -DOPENSSL_INCLUDE_DIR=D:\a\Build-libcurl\Build-libcurl\build\install\include ^
+            -DOPENSSL_CRYPTO_LIBRARY=D:\a\Build-libcurl\Build-libcurl\build\install\lib\libcrypto.lib ^
+            -DOPENSSL_SSL_LIBRARY=D:\a\Build-libcurl\Build-libcurl\build\install\lib\libssl.lib ^
+            -DLIBSSH2_LIBRARY=D:\a\Build-libcurl\Build-libcurl\build\install\lib\libssh2.lib ^
+            -DLIBSSH2_INCLUDE_DIR=D:\a\Build-libcurl\Build-libcurl\build\install\include ^
+            -DZLIB_LIBRARY=D:\a\Build-libcurl\Build-libcurl\build\install\zlib.lib ^
+            -DZLIB_INCLUDE_DIR=D:\a\Build-libcurl\Build-libcurl\build\install ^
             -DHTTP_ONLY=OFF ^
             -DENABLE_IPV6=ON ^
             -DBUILD_CURL_EXE=OFF
@@ -139,13 +145,13 @@ jobs:
           cmake --build . --config Release
           echo Installing curl shared...
           cmake --install .
-          dir C:\curl\shared
+          dir D:\a\Build-libcurl\Build-libcurl\build\shared
 
       - name: Get version
         id: version
         shell: pwsh
         run: |
-          cd C:\curl\curl
+          cd D:\a\Build-libcurl\Build-libcurl\build\curl
           $tag = git describe --tags --abbrev=0 2>$null
           if ($tag) {
             $version = $tag.TrimStart('curl-')
@@ -160,7 +166,7 @@ jobs:
           $ver = "${{ steps.version.outputs.version }}"
           $arch = "${{ github.event.inputs.arch }}"
           
-          cd C:\curl
+          cd D:\a\Build-libcurl\Build-libcurl\build
           
           # Static package
           if (Test-Path static) {
@@ -178,4 +184,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: libcurl-${{ github.event.inputs.arch }}
-          path: C:\curl\*.zip
+          path: D:\a\Build-libcurl\Build-libcurl\build\*.zip
