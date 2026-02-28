@@ -17,12 +17,37 @@ jobs:
           git clone https://github.com/Microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat
       
-      - name: Build curl
+      - name: Check available features
         run: |
-          .\vcpkg\vcpkg install curl[openssl,libpsl,ssh,zlib] --triplet ${{ github.event.inputs.arch }}-windows-static
-          .\vcpkg\vcpkg install curl[openssl,libpsl,ssh,zlib] --triplet ${{ github.event.inputs.arch }}-windows
+          .\vcpkg\vcpkg search curl
+      
+      - name: Build curl static
+        run: |
+          .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet ${{ github.event.inputs.arch }}-windows-static
+      
+      - name: Build curl dynamic
+        run: |
+          .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet ${{ github.event.inputs.arch }}-windows
+      
+      - name: List packages
+        run: |
+          dir .\vcpkg\packages
+          dir .\vcpkg\installed\${{ github.event.inputs.arch }}-windows
+      
+      - name: Package static
+        run: |
+          mkdir package-static
+          xcopy /e /y .\vcpkg\installed\${{ github.event.inputs.arch }}-windows-static\* package-static\
+          Compress-Archive -Path package-static\* -DestinationPath libcurl-${{ github.event.inputs.arch }}-static.zip
+      
+      - name: Package dynamic
+        run: |
+          mkdir package-dynamic
+          xcopy /e /y .\vcpkg\installed\${{ github.event.inputs.arch }}-windows\* package-dynamic\
+          Compress-Archive -Path package-dynamic\* -DestinationPath libcurl-${{ github.event.inputs.arch }}-dynamic.zip
       
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          path: vcpkg\packages\*.zip
+          path: |
+            *.zip
