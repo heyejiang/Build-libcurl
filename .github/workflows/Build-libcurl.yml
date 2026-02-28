@@ -11,162 +11,18 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    defaults:
-      run:
-        shell: cmd
-        working-directory: D:\a\Build-libcurl
-    
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup VS env
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: ${{ github.event.inputs.arch }}
+      - name: Install vcpkg
+        run: |
+          git clone https://github.com/Microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
       
-      - name: Create directories
+      - name: Build curl
         run: |
-          if exist build rmdir /s /q build
-          mkdir build
-          cd build
-          mkdir install
-          echo Current directory: %CD%
-
-      - name: Build zlib
-        run: |
-          cd build
-          git clone --depth 1 --branch v1.3.1 https://github.com/madler/zlib.git
-          cd zlib
-          nmake /f win32\Makefile.msc clean
-          nmake /f win32\Makefile.msc
-          copy zlib.lib ..\install\
-          copy zlib.h ..\install\
-          copy zconf.h ..\install\
-
-      - name: Install OpenSSL
-        run: |
-          cd build
-          if "${{ github.event.inputs.arch }}"=="x64" (
-            curl -L -o openssl.exe https://slproweb.com/download/Win64OpenSSL-3_5_5.exe
-          ) else (
-            curl -L -o openssl.exe https://slproweb.com/download/Win32OpenSSL-3_5_5.exe
-          )
-          openssl.exe /silent /verysilent /dir=%CD%\install
-
-      - name: Build libssh2
-        run: |
-          cd build
-          git clone --depth 1 --branch libssh2-1.11.0 https://github.com/libssh2/libssh2.git
-          cd libssh2
-          mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A ${{ github.event.inputs.arch == 'x64' && 'x64' || 'Win32' }} ^
-            -DCMAKE_INSTALL_PREFIX=D:\a\Build-libcurl\build\install ^
-            -DCRYPTO_BACKEND=OpenSSL ^
-            -DOPENSSL_ROOT_DIR=D:\a\Build-libcurl\build\install ^
-            -DOPENSSL_INCLUDE_DIR=D:\a\Build-libcurl\build\install\include ^
-            -DOPENSSL_LIBRARIES="D:\a\Build-libcurl\build\install\lib\libssl.lib;D:\a\Build-libcurl\build\install\lib\libcrypto.lib" ^
-            -DBUILD_SHARED_LIBS=ON ^
-            -DBUILD_EXAMPLES=OFF ^
-            -DBUILD_TESTING=OFF
-          cmake --build . --config Release
-          cmake --install .
-
-      - name: Clone curl
-        run: |
-          cd build
-          git clone --depth 1 https://github.com/curl/curl.git
-
-      - name: Build curl static
-        run: |
-          cd build\curl
-          mkdir build-static
-          cd build-static
-          cmake .. -G "Visual Studio 17 2022" -A ${{ github.event.inputs.arch == 'x64' && 'x64' || 'Win32' }} ^
-            -DCMAKE_INSTALL_PREFIX=D:\a\Build-libcurl\build\static ^
-            -DBUILD_SHARED_LIBS=OFF ^
-            -DCMAKE_USE_OPENSSL=ON ^
-            -DCMAKE_USE_LIBSSH2=ON ^
-            -DUSE_ZLIB=ON ^
-            -DOPENSSL_ROOT_DIR=D:\a\Build-libcurl\build\install ^
-            -DOPENSSL_INCLUDE_DIR=D:\a\Build-libcurl\build\install\include ^
-            -DOPENSSL_CRYPTO_LIBRARY=D:\a\Build-libcurl\build\install\lib\libcrypto.lib ^
-            -DOPENSSL_SSL_LIBRARY=D:\a\Build-libcurl\build\install\lib\libssl.lib ^
-            -DLIBSSH2_LIBRARY=D:\a\Build-libcurl\build\install\lib\libssh2.lib ^
-            -DLIBSSH2_INCLUDE_DIR=D:\a\Build-libcurl\build\install\include ^
-            -DZLIB_LIBRARY=D:\a\Build-libcurl\build\install\zlib.lib ^
-            -DZLIB_INCLUDE_DIR=D:\a\Build-libcurl\build\install ^
-            -DCURL_DISABLE_LDAP=ON ^
-            -DCURL_DISABLE_LDAPS=ON ^
-            -DHTTP_ONLY=OFF ^
-            -DENABLE_IPV6=ON ^
-            -DBUILD_CURL_EXE=OFF ^
-            -DBUILD_TESTING=OFF
-          cmake --build . --config Release
-          cmake --install .
-
-      - name: Build curl shared
-        run: |
-          cd build\curl
-          mkdir build-shared
-          cd build-shared
-          cmake .. -G "Visual Studio 17 2022" -A ${{ github.event.inputs.arch == 'x64' && 'x64' || 'Win32' }} ^
-            -DCMAKE_INSTALL_PREFIX=D:\a\Build-libcurl\build\shared ^
-            -DBUILD_SHARED_LIBS=ON ^
-            -DCMAKE_USE_OPENSSL=ON ^
-            -DCMAKE_USE_LIBSSH2=ON ^
-            -DUSE_ZLIB=ON ^
-            -DOPENSSL_ROOT_DIR=D:\a\Build-libcurl\build\install ^
-            -DOPENSSL_INCLUDE_DIR=D:\a\Build-libcurl\build\install\include ^
-            -DOPENSSL_CRYPTO_LIBRARY=D:\a\Build-libcurl\build\install\lib\libcrypto.lib ^
-            -DOPENSSL_SSL_LIBRARY=D:\a\Build-libcurl\build\install\lib\libssl.lib ^
-            -DLIBSSH2_LIBRARY=D:\a\Build-libcurl\build\install\lib\libssh2.lib ^
-            -DLIBSSH2_INCLUDE_DIR=D:\a\Build-libcurl\build\install\include ^
-            -DZLIB_LIBRARY=D:\a\Build-libcurl\build\install\zlib.lib ^
-            -DZLIB_INCLUDE_DIR=D:\a\Build-libcurl\build\install ^
-            -DCURL_DISABLE_LDAP=ON ^
-            -DCURL_DISABLE_LDAPS=ON ^
-            -DHTTP_ONLY=OFF ^
-            -DENABLE_IPV6=ON ^
-            -DBUILD_CURL_EXE=OFF ^
-            -DBUILD_TESTING=OFF
-          cmake --build . --config Release
-          cmake --install .
-
-      - name: Get version
-        id: version
-        shell: pwsh
-        run: |
-          cd build\curl
-          $tag = git describe --tags --abbrev=0 2>$null
-          if ($tag) {
-            $version = $tag.TrimStart('curl-')
-          } else {
-            $version = "latest"
-          }
-          echo "version=$version" >> $env:GITHUB_OUTPUT
-
-      - name: Package
-        shell: pwsh
-        run: |
-          $ver = "${{ steps.version.outputs.version }}"
-          $arch = "${{ github.event.inputs.arch }}"
-          
-          cd build
-          
-          # Static package
-          if (Test-Path static) {
-            Compress-Archive -Path static\* -DestinationPath libcurl-${ver}-${arch}-static.zip -Force
-          }
-          
-          # Shared package
-          if (Test-Path shared) {
-            Compress-Archive -Path shared\* -DestinationPath libcurl-${ver}-${arch}-shared.zip -Force
-          }
-
+          .\vcpkg\vcpkg install curl[openssl,libpsl,ssh,zlib] --triplet ${{ github.event.inputs.arch }}-windows-static
+          .\vcpkg\vcpkg install curl[openssl,libpsl,ssh,zlib] --triplet ${{ github.event.inputs.arch }}-windows
+      
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: libcurl-${{ github.event.inputs.arch }}
-          path: build\*.zip
+          path: vcpkg\packages\*.zip
