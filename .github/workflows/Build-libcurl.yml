@@ -6,7 +6,8 @@ on:
       arch:
         default: 'x64'
   push:
-    tags: ['v*']
+    tags:
+      - 'v*'
 
 jobs:
   build:
@@ -17,10 +18,6 @@ jobs:
           git clone https://github.com/Microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat
       
-      - name: Check available features
-        run: |
-          .\vcpkg\vcpkg search curl
-      
       - name: Build curl static
         run: |
           .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet ${{ github.event.inputs.arch }}-windows-static
@@ -29,25 +26,74 @@ jobs:
         run: |
           .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet ${{ github.event.inputs.arch }}-windows
       
-      - name: List packages
+      - name: Get version
+        id: version
+        shell: pwsh
         run: |
-          dir .\vcpkg\packages
-          dir .\vcpkg\installed\${{ github.event.inputs.arch }}-windows
+          $version = "8.18.0"
+          if ("${{ github.ref }}" -match "refs/tags/v(.*)") {
+            $version = $matches[1]
+          }
+          echo "version=$version" >> $env:GITHUB_OUTPUT
       
       - name: Package static
         run: |
           mkdir package-static
           xcopy /e /y .\vcpkg\installed\${{ github.event.inputs.arch }}-windows-static\* package-static\
-          Compress-Archive -Path package-static\* -DestinationPath libcurl-${{ github.event.inputs.arch }}-static.zip
+          Compress-Archive -Path package-static\* -DestinationPath libcurl-${{ steps.version.outputs.version }}-${{ github.event.inputs.arch }}-static.zip -Force
       
       - name: Package dynamic
         run: |
           mkdir package-dynamic
           xcopy /e /y .\vcpkg\installed\${{ github.event.inputs.arch }}-windows\* package-dynamic\
-          Compress-Archive -Path package-dynamic\* -DestinationPath libcurl-${{ github.event.inputs.arch }}-dynamic.zip
+          Compress-Archive -Path package-dynamic\* -DestinationPath libcurl-${{ steps.version.outputs.version }}-${{ github.event.inputs.arch }}-dynamic.zip -Force
       
-      - name: Upload
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
+          name: libcurl-${{ github.event.inputs.arch }}
           path: |
             *.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      
+      - name: List files
+        run: ls -la artifacts/
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: libcurl ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body: |
+            # libcurl ${{ github.ref_name }}
+            
+            Automated build with vcpkg.
+            
+            ## Features
+            - OpenSSL support
+            - SSH support (libssh2)
+            - HTTP/2 support (nghttp2)
+            - PSL support (libpsl)
+            - zlib compression
+            
+            ## Files
+            - `*-static.zip`: Static libraries (.lib) for MSVC
+            - `*-dynamic.zip`: Dynamic libraries (.dll + .lib) for MSVC
+            
+            ## Usage
+            ### Static linking
+            ```cpp
+            #define CURL_STATICLIB
+            #include <curl/curl.h>
