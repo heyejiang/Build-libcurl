@@ -34,18 +34,6 @@ jobs:
           mkdir install
           echo Current directory: %CD%
 
-      - name: Install vcpkg dependencies
-        run: |
-          cd D:\a\Build-libcurl\Build-libcurl
-          git clone https://github.com/Microsoft/vcpkg.git
-          cd vcpkg
-          bootstrap-vcpkg.bat
-          .\vcpkg.exe install libpsl --triplet ${{ github.event.inputs.arch }}-windows
-          .\vcpkg.exe install brotli --triplet ${{ github.event.inputs.arch }}-windows
-          .\vcpkg.exe install zstd --triplet ${{ github.event.inputs.arch }}-windows
-          .\vcpkg.exe install nghttp2 --triplet ${{ github.event.inputs.arch }}-windows
-          .\vcpkg.exe install libidn2 --triplet ${{ github.event.inputs.arch }}-windows
-
       - name: Build zlib
         run: |
           cd D:\a\Build-libcurl\Build-libcurl\build
@@ -101,7 +89,7 @@ jobs:
           git clone --depth 1 https://github.com/curl/curl.git
           dir curl
 
-      - name: Build curl static (with disabled optional features)
+      - name: Build curl static
         run: |
           cd D:\a\Build-libcurl\Build-libcurl\build\curl
           mkdir build-static
@@ -121,14 +109,13 @@ jobs:
             -DLIBSSH2_INCLUDE_DIR=D:\a\Build-libcurl\Build-libcurl\build\install\include ^
             -DZLIB_LIBRARY=D:\a\Build-libcurl\Build-libcurl\build\install\zlib.lib ^
             -DZLIB_INCLUDE_DIR=D:\a\Build-libcurl\Build-libcurl\build\install ^
+            -DCMAKE_DISABLE_FIND_PACKAGE_Libpsl=ON ^
+            -DCMAKE_DISABLE_FIND_PACKAGE_Brotli=ON ^
+            -DCMAKE_DISABLE_FIND_PACKAGE_Zstd=ON ^
+            -DCMAKE_DISABLE_FIND_PACKAGE_NGHTTP2=ON ^
+            -DCMAKE_DISABLE_FIND_PACKAGE_Libidn2=ON ^
             -DCURL_DISABLE_LDAP=ON ^
             -DCURL_DISABLE_LDAPS=ON ^
-            -DUSE_NGHTTP2=OFF ^
-            -DUSE_LIBIDN2=OFF ^
-            -DUSE_LIBPSL=OFF ^
-            -DUSE_BROTLI=OFF ^
-            -DUSE_ZSTD=OFF ^
-            -DENABLE_UNICODE=OFF ^
             -DHTTP_ONLY=OFF ^
             -DENABLE_IPV6=ON ^
             -DBUILD_CURL_EXE=OFF ^
@@ -139,7 +126,7 @@ jobs:
           cmake --install .
           dir D:\a\Build-libcurl\Build-libcurl\build\static
 
-      - name: Build curl shared (with disabled optional features)
+      - name: Build curl shared
         run: |
           cd D:\a\Build-libcurl\Build-libcurl\build\curl
           mkdir build-shared
@@ -159,14 +146,13 @@ jobs:
             -DLIBSSH2_INCLUDE_DIR=D:\a\Build-libcurl\Build-libcurl\build\install\include ^
             -DZLIB_LIBRARY=D:\a\Build-libcurl\Build-libcurl\build\install\zlib.lib ^
             -DZLIB_INCLUDE_DIR=D:\a\Build-libcurl\Build-libcurl\build\install ^
+            -DCMAKE_DISABLE_FIND_PACKAGE_Libpsl=ON ^
+            -DCMAKE_DISABLE_FIND_PACKAGE_Brotli=ON ^
+            -DCMAKE_DISABLE_FIND_PACKAGE_Zstd=ON ^
+            -DCMAKE_DISABLE_FIND_PACKAGE_NGHTTP2=ON ^
+            -DCMAKE_DISABLE_FIND_PACKAGE_Libidn2=ON ^
             -DCURL_DISABLE_LDAP=ON ^
             -DCURL_DISABLE_LDAPS=ON ^
-            -DUSE_NGHTTP2=OFF ^
-            -DUSE_LIBIDN2=OFF ^
-            -DUSE_LIBPSL=OFF ^
-            -DUSE_BROTLI=OFF ^
-            -DUSE_ZSTD=OFF ^
-            -DENABLE_UNICODE=OFF ^
             -DHTTP_ONLY=OFF ^
             -DENABLE_IPV6=ON ^
             -DBUILD_CURL_EXE=OFF ^
