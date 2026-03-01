@@ -53,6 +53,19 @@ jobs:
           git clone https://github.com/Microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat
 
+      # 新增：vcpkg 缓存（下载、二进制包、已安装文件）
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            vcpkg/downloads
+            vcpkg/packages
+            vcpkg/installed
+          key: vcpkg-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.github/workflows/Build.yml') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ matrix.arch }}-
+          save-always: true
+
       - name: Install dependencies for ${{ matrix.arch }}
         run: |
           $arch = "${{ matrix.arch }}"
@@ -64,14 +77,15 @@ jobs:
             $triplet = "$arch-windows"
           }
           
-          # Install all required dependencies
+          # 安装所有依赖（如有缓存将跳过编译）
           .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet $triplet_static
           .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet $triplet
           
-          # Ensure all dependencies are installed with headers
+          # 确保所有依赖的头文件也被安装
           .\vcpkg\vcpkg install openssl libssh2 nghttp2 libpsl zlib --triplet $triplet_static
           .\vcpkg\vcpkg install openssl libssh2 nghttp2 libpsl zlib --triplet $triplet
 
+      # 其余步骤（获取版本、打包、上传）保持不变...
       - name: Get version
         id: version
         shell: pwsh
