@@ -1,23 +1,27 @@
 name: Build libcurl with CMake
 
-on: 
-  workflow_dispatch: 
-    inputs: 
+on:
+  workflow_dispatch:
+    inputs:
       curl_version:
         description: 'Curl version tag (e.g., curl-8_6_0)'
         required: true
         default: 'master'
         type: string
 
-jobs: 
-  build: 
+# 添加写入权限以创建 Release
+permissions:
+  contents: write
+
+jobs:
+  build:
     runs-on: windows-latest
-    
-    strategy: 
-      matrix: 
+
+    strategy:
+      matrix:
         arch: [x64]
 
-    steps: 
+    steps:
       - name: Checkout curl source
         uses: actions/checkout@v4
         with:
@@ -26,17 +30,17 @@ jobs:
 
       - name: Setup Visual Studio
         uses: ilammy/msvc-dev-cmd@v1
-        with: 
+        with:
           arch: ${{ matrix.arch }}
 
       - name: Install static dependencies via vcpkg
         shell: pwsh
-        run: | 
+        run: |
           vcpkg install openssl c-ares zlib libssh2 nghttp2 msh3 --triplet x64-windows-static-md
 
       - name: Configure CMake for Mixed Linkage
         shell: pwsh
-        run: | 
+        run: |
           cmake -B build -G "Visual Studio 17 2022" -A ${{ matrix.arch }} `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET="x64-windows-static-md" `
@@ -50,31 +54,28 @@ jobs:
             -DUSE_WINDOWS_SSPI=ON `
             -DUSE_NGHTTP2=ON `
             -DUSE_MSH3=ON `
-            -DCURL_USE_LIBPSL=OFF           # 禁用 libpsl（未安装）
+            -DCURL_USE_LIBPSL=OFF
 
       - name: Build libcurl
         shell: pwsh
-        run: | 
+        run: |
           cmake --build build --config Release --parallel
 
       - name: Collect and Package Artifacts
         shell: pwsh
-        run: | 
+        run: |
           $dir = "libcurl-vc18-x64-release-dll-ssl-static-cares-static-zlib-static-ssh2-static-ipv6-sspi-nghttp2-static-msh3-static"
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\bin" -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
-
           Copy-Item -Path "build\lib\Release\*.dll" -Destination "$dir\bin\" -Force
           Copy-Item -Path "build\lib\Release\*.lib" -Destination "$dir\lib\" -Force
-          
+
           if (Test-Path "$dir\lib\libcurl.lib") {
             Rename-Item -Path "$dir\lib\libcurl.lib" -NewName "libcurl_imp.lib"
           }
-
           Copy-Item -Path "include\curl\*" -Destination "$dir\include\" -Recurse -Force
-
           $vcpkg_libs = "$env:VCPKG_INSTALLATION_ROOT\packages"
           $deps = @("openssl", "zlib", "libssh2", "nghttp2", "c-ares", "msh3")
           foreach ($lib in $deps) {
@@ -83,7 +84,6 @@ jobs:
                   Copy-Item -Path "$src\*.lib" -Destination "$dir\lib\" -Force
               }
           }
-
           $ReadmeContent = @"
           ## Required System Libraries
           When linking dynamically to libcurl_imp.lib, you must link:
@@ -95,11 +95,31 @@ jobs:
           - user32.lib
           "@
           Out-File -FilePath "$dir\README.md" -InputObject $ReadmeContent -Encoding UTF8
-
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
-        with: 
+        with:
           name: libcurl-vc18-x64-mixed-build
           path: libcurl-vc18-x64-release-dll-ssl-static-cares-static-zlib-static-ssh2-static-ipv6-sspi-nghttp2-static-msh3-static.zip
+
+      # ===== 新增：自动创建 Release 并上传资产 =====
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          # 生成标签名：libcurl-<输入版本>-<运行ID>
+          tag_name: libcurl-${{ github.event.inputs.curl_version }}-${{ github.run_id }}
+          # 可读的 Release 名称
+          name: libcurl ${{ github.event.inputs.curl_version }} (x64) - Build ${{ github.run_id }}
+          # 如果输入版本包含 "master"，标记为预发布；否则为非草稿、非预发布
+          prerelease: ${{ contains(github.event.inputs.curl_version, 'master') }}
+          # 非草稿
+          draft: false
+          # 使用打包时生成的 README.md 作为 Release 说明
+          body_path: libcurl-vc18-x64-release-dll-ssl-static-cares-static-zlib-static-ssh2-static-ipv6-sspi-nghttp2-static-msh3-static/README.md
+          # 要上传的资产文件
+          files: |
+            libcurl-vc18-x64-release-dll-ssl-static-cares-static-zlib-static-ssh2-static-ipv6-sspi-nghttp2-static-msh3-static.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
