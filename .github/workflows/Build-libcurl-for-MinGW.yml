@@ -1,0 +1,91 @@
+name: Build libcurl for MinGW
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        default: 'x86_64'
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-mingw:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    
+    steps:
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: |
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-openssl
+            mingw-w64-x86_64-libssh2
+            mingw-w64-x86_64-zlib
+            git
+            base-devel
+
+      - name: Checkout curl source
+        run: |
+          git clone --depth 1 https://github.com/curl/curl.git
+          cd curl
+
+      - name: Build curl static
+        run: |
+          cd curl
+          mkdir build-static
+          cd build-static
+          cmake .. -G "Ninja" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/c/curl-mingw-static \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCURL_STATICLIB=ON \
+            -DCMAKE_USE_OPENSSL=ON \
+            -DCMAKE_USE_LIBSSH2=ON \
+            -DUSE_ZLIB=ON \
+            -DHTTP_ONLY=OFF \
+            -DENABLE_IPV6=ON \
+            -DBUILD_CURL_EXE=OFF \
+            -DBUILD_TESTING=OFF
+          
+          cmake --build . --config Release
+          cmake --install .
+
+      - name: Build curl shared
+        run: |
+          cd curl
+          mkdir build-shared
+          cd build-shared
+          cmake .. -G "Ninja" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/c/curl-mingw-shared \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_USE_OPENSSL=ON \
+            -DCMAKE_USE_LIBSSH2=ON \
+            -DUSE_ZLIB=ON \
+            -DHTTP_ONLY=OFF \
+            -DENABLE_IPV6=ON \
+            -DBUILD_CURL_EXE=OFF \
+            -DBUILD_TESTING=OFF
+          
+          cmake --build . --config Release
+          cmake --install .
+
+      - name: Package artifacts
+        run: |
+          cd /c
+          tar -czf curl-mingw-static.tar.gz curl-mingw-static/
+          tar -czf curl-mingw-shared.tar.gz curl-mingw-shared/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libcurl-mingw-${{ github.event.inputs.arch }}
+          path: C:\*.tar.gz
