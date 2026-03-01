@@ -1,4 +1,4 @@
-name: Build libcurl with CMake
+name: Build libcurl with CMake (Shared + Static)
 
 on:
   workflow_dispatch:
@@ -8,14 +8,6 @@ on:
         required: true
         default: 'master'
         type: string
-      build_type:
-        description: 'Build type: shared (DLL) or static (LIB)'
-        required: true
-        default: 'shared'
-        type: choice
-        options:
-          - shared
-          - static
 
 permissions:
   contents: write
@@ -23,10 +15,10 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-
     strategy:
       matrix:
         arch: [x64]
+        build_type: [shared, static]   # 同时构建两种类型
 
     steps:
       - name: Checkout curl source
@@ -45,10 +37,10 @@ jobs:
         run: |
           vcpkg install openssl c-ares zlib libssh2 nghttp2 msh3 --triplet x64-windows-static-md
 
-      - name: Configure CMake for ${{ github.event.inputs.build_type }} build
+      - name: Configure CMake for ${{ matrix.build_type }} build
         shell: pwsh
         run: |
-          $shared = "${{ github.event.inputs.build_type }}" -eq "shared"
+          $shared = "${{ matrix.build_type }}" -eq "shared"
           cmake -B build -G "Visual Studio 17 2022" -A ${{ matrix.arch }} `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET="x64-windows-static-md" `
@@ -72,7 +64,7 @@ jobs:
       - name: Collect and Package Artifacts
         shell: pwsh
         run: |
-          $buildType = "${{ github.event.inputs.build_type }}"
+          $buildType = "${{ matrix.build_type }}"
           $typeSuffix = if ($buildType -eq "shared") { "dll" } else { "static" }
           $dir = "libcurl-vc18-x64-release-$typeSuffix-ssl-static-cares-static-zlib-static-ssh2-static-ipv6-sspi-nghttp2-static-msh3-static"
           New-Item -ItemType Directory -Path $dir -Force
@@ -145,26 +137,50 @@ jobs:
           Out-File -FilePath "$dir\README.md" -InputObject $ReadmeContent -Encoding UTF8
 
           # Create zip archive
-          Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
+          $zipName = "$dir.zip"
+          Compress-Archive -Path "$dir\*" -DestinationPath $zipName -Force
 
-          # Set environment variable for later steps
-          echo "PACKAGE_DIR=$dir" >> $env:GITHUB_ENV
+          # Set output variable for artifact name
+          echo "artifact_name=$zipName" >> $env:GITHUB_ENV
 
-      - name: Upload Artifact
+      - name: Upload Artifact (per build type)
         uses: actions/upload-artifact@v4
         with:
-          name: libcurl-vc18-x64-${{ github.event.inputs.build_type }}-build
-          path: ${{ env.PACKAGE_DIR }}.zip
+          name: libcurl-${{ matrix.build_type }}-${{ github.run_id }}
+          path: ${{ env.artifact_name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir release-assets
+          # 查找所有 zip 文件并复制到统一目录
+          find artifacts -name "*.zip" -exec cp {} release-assets/ \;
+          echo "Release assets:"
+          ls -la release-assets/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: libcurl-${{ github.event.inputs.curl_version }}-${{ github.event.inputs.build_type }}-${{ github.run_id }}
-          name: libcurl ${{ github.event.inputs.curl_version }} (${{ github.event.inputs.build_type }}, x64) - Build ${{ github.run_id }}
+          tag_name: libcurl-${{ github.event.inputs.curl_version }}-${{ github.run_id }}
+          name: libcurl ${{ github.event.inputs.curl_version }} (x64, shared+static) - Build ${{ github.run_id }}
           prerelease: ${{ contains(github.event.inputs.curl_version, 'master') }}
           draft: false
-          body_path: ${{ env.PACKAGE_DIR }}/README.md
-          files: |
-            ${{ env.PACKAGE_DIR }}.zip
+          body: |
+            This release contains both shared (DLL) and static (LIB) builds of libcurl for Windows x64.
+            
+            - **Shared build**: `libcurl.dll` + `libcurl_imp.lib` + headers
+            - **Static build**: `libcurl.lib` + all dependency static libraries + headers
+            
+            See README inside each package for linking instructions.
+          files: release-assets/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
