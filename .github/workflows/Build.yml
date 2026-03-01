@@ -22,6 +22,7 @@ on:
         required: false
         default: false
         type: boolean
+
   push:
     tags:
       - v*
@@ -29,9 +30,11 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+
     strategy:
       matrix:
         arch: ${{ fromJSON(format('[{0}]', github.event.inputs.arch)) }}
+
     steps:
       - name: Setup Visual Studio
         uses: ilammy/msvc-dev-cmd@v1
@@ -54,10 +57,10 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $version = "8.18.0"
-          if ("${{ github.ref }}" -match "refs/tags/v(.*)") {
-            $version = $matches[1]
-          }
+          $version = "8.18.0" 
+          if ("${{ github.ref }}" -match "refs/tags/v(.*)") { 
+            $version = $matches[1] 
+          } 
           echo "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Package static for ${{ matrix.arch }}
@@ -70,13 +73,19 @@ jobs:
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
-          
+
           $src = "vcpkg\packages\curl_${{ matrix.arch }}-windows-static"
           if (Test-Path $src) {
             Copy-Item -Path "$src\lib\*.lib" -Destination "$dir\lib\" -Force
             Copy-Item -Path "$src\include\*" -Destination "$dir\include\" -Recurse -Force
           }
-          
+
+          # Copy static libraries for dependencies
+          $dependencies = @("libssl", "libcrypto", "libssh2")
+          foreach ($lib in $dependencies) {
+              Copy-Item -Path "vcpkg\packages\$lib_${{ matrix.arch }}-windows-static\lib\*.lib" -Destination "$dir\lib\" -Force
+          }
+
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
 
       - name: Package shared for ${{ matrix.arch }}
@@ -90,14 +99,20 @@ jobs:
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\bin" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
-          
+
           $src = "vcpkg\packages\curl_${{ matrix.arch }}-windows"
           if (Test-Path $src) {
             Copy-Item -Path "$src\bin\*.dll" -Destination "$dir\bin\" -Force
             Copy-Item -Path "$src\lib\*.lib" -Destination "$dir\lib\" -Force
             Copy-Item -Path "$src\include\*" -Destination "$dir\include\" -Recurse -Force
           }
-          
+
+          # Copy shared libraries for dependencies
+          $dependencies = @("libssl", "libcrypto", "libssh2")
+          foreach ($lib in $dependencies) {
+              Copy-Item -Path "vcpkg\packages\$lib_${{ matrix.arch }}-windows\lib\*.lib" -Destination "$dir\lib\" -Force
+          }
+
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
 
       - name: Upload static for ${{ matrix.arch }}
@@ -118,7 +133,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: |
-      startsWith(github.ref, 'refs/tags/v') || 
+      startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
     permissions:
       contents: write
@@ -128,36 +143,26 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-          
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           name: libcurl ${{ github.ref_name }} for MSVC
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }} 
           body: |
-            # libcurl ${{ github.ref_name }} for MSVC
-            
             ## Architectures
-            - x64 (64-bit)
-            - x86 (32-bit)
+            - x64 (64-bit) 
+            - x86 (32-bit) 
             
             ## Library Files
-            - libcurl.lib (static library)
-            - libcurl_imp.lib (import library for DLL)
+            - libcurl.lib (static library) 
+            - libcurl_imp.lib (import library for DLL) 
             - libssl.lib
             - libcrypto.lib
             - libssh2.lib
-            - nghttp2.lib
-            - psl.lib
-            - zlib.lib
             
             ## System Libraries Required
-            - ws2_32.lib
             - crypt32.lib
-            - wldap32.lib
-            - bcrypt.lib
-            - user32.lib
-            - advapi32.lib
             
             ## Static Build
             - Use: libcurl.lib + all dependency libs
