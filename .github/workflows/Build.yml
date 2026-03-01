@@ -27,15 +27,11 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        arch: [${{ github.event.inputs.arch }}]
-    
     steps:
       - name: Setup Visual Studio
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: ${{ matrix.arch }}
+          arch: ${{ github.event.inputs.arch }}
 
       - name: Install vcpkg
         run: |
@@ -44,8 +40,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet ${{ matrix.arch }}-windows-static
-          .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet ${{ matrix.arch }}-windows
+          .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet ${{ github.event.inputs.arch }}-windows-static
+          .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet ${{ github.event.inputs.arch }}-windows
 
       - name: Get version
         id: version
@@ -62,19 +58,16 @@ jobs:
         shell: pwsh
         run: |
           $ver = "${{ steps.version.outputs.version }}"
-          $arch = "${{ matrix.arch }}"
+          $arch = "${{ github.event.inputs.arch }}"
           $dir = "libcurl-${ver}-${arch}-static"
-          
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
-          
-          $src = "vcpkg\packages\curl_${{ matrix.arch }}-windows-static"
+          $src = "vcpkg\packages\curl_${{ github.event.inputs.arch }}-windows-static"
           if (Test-Path $src) {
             Copy-Item -Path "$src\lib\*.lib" -Destination "$dir\lib\" -Force
             Copy-Item -Path "$src\include\*" -Destination "$dir\include\" -Recurse -Force
           }
-          
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
 
       - name: Package shared
@@ -82,35 +75,32 @@ jobs:
         shell: pwsh
         run: |
           $ver = "${{ steps.version.outputs.version }}"
-          $arch = "${{ matrix.arch }}"
+          $arch = "${{ github.event.inputs.arch }}"
           $dir = "libcurl-${ver}-${arch}-shared"
-          
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\bin" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
-          
-          $src = "vcpkg\packages\curl_${{ matrix.arch }}-windows"
+          $src = "vcpkg\packages\curl_${{ github.event.inputs.arch }}-windows"
           if (Test-Path $src) {
             Copy-Item -Path "$src\bin\*.dll" -Destination "$dir\bin\" -Force
             Copy-Item -Path "$src\lib\*.lib" -Destination "$dir\lib\" -Force
             Copy-Item -Path "$src\include\*" -Destination "$dir\include\" -Recurse -Force
           }
-          
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
 
       - name: Upload static
         if: github.event.inputs.build_type == 'static' || github.event.inputs.build_type == 'both'
         uses: actions/upload-artifact@v4
         with:
-          name: libcurl-${{ matrix.arch }}-static
+          name: libcurl-${{ github.event.inputs.arch }}-static
           path: libcurl-*-static.zip
 
       - name: Upload shared
         if: github.event.inputs.build_type == 'shared' || github.event.inputs.build_type == 'both'
         uses: actions/upload-artifact@v4
         with:
-          name: libcurl-${{ matrix.arch }}-shared
+          name: libcurl-${{ github.event.inputs.arch }}-shared
           path: libcurl-*-shared.zip
 
   release:
@@ -125,7 +115,6 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-          
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
