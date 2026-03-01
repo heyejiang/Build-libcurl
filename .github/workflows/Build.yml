@@ -6,11 +6,8 @@ on:
       arch:
         description: Architecture
         required: true
-        default: x64
-        type: choice
-        options:
-          - x64
-          - x86
+        default: 'x64,x86'
+        type: string
       build_type:
         description: Build Type
         required: true
@@ -32,21 +29,26 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: ${{ fromJSON(format('[{0}]', github.event.inputs.arch)) }}
     steps:
       - name: Setup Visual Studio
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: ${{ github.event.inputs.arch }}
+          arch: ${{ matrix.arch == 'x64' && 'x64' || 'x86' }}
 
       - name: Install vcpkg
         run: |
           git clone https://github.com/Microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat
 
-      - name: Install dependencies
+      - name: Install dependencies for ${{ matrix.arch }}
         run: |
-          .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet ${{ github.event.inputs.arch }}-windows-static
-          .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet ${{ github.event.inputs.arch }}-windows
+          $triplet = "${{ matrix.arch }}-windows"
+          $triplet_static = "${{ matrix.arch }}-windows-static"
+          .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet $triplet_static
+          .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet $triplet
 
       - name: Get version
         id: version
@@ -58,18 +60,18 @@ jobs:
           }
           echo "version=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Package static
+      - name: Package static for ${{ matrix.arch }}
         if: github.event.inputs.build_type == 'static' || github.event.inputs.build_type == 'both'
         shell: pwsh
         run: |
           $ver = "${{ steps.version.outputs.version }}"
-          $arch = "${{ github.event.inputs.arch }}"
+          $arch = "${{ matrix.arch }}"
           $dir = "libcurl-${ver}-${arch}-static"
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
           
-          $src = "vcpkg\packages\curl_${{ github.event.inputs.arch }}-windows-static"
+          $src = "vcpkg\packages\curl_${{ matrix.arch }}-windows-static"
           if (Test-Path $src) {
             Copy-Item -Path "$src\lib\*.lib" -Destination "$dir\lib\" -Force
             Copy-Item -Path "$src\include\*" -Destination "$dir\include\" -Recurse -Force
@@ -77,19 +79,19 @@ jobs:
           
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
 
-      - name: Package shared
+      - name: Package shared for ${{ matrix.arch }}
         if: github.event.inputs.build_type == 'shared' || github.event.inputs.build_type == 'both'
         shell: pwsh
         run: |
           $ver = "${{ steps.version.outputs.version }}"
-          $arch = "${{ github.event.inputs.arch }}"
+          $arch = "${{ matrix.arch }}"
           $dir = "libcurl-${ver}-${arch}-shared"
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\bin" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
           
-          $src = "vcpkg\packages\curl_${{ github.event.inputs.arch }}-windows"
+          $src = "vcpkg\packages\curl_${{ matrix.arch }}-windows"
           if (Test-Path $src) {
             Copy-Item -Path "$src\bin\*.dll" -Destination "$dir\bin\" -Force
             Copy-Item -Path "$src\lib\*.lib" -Destination "$dir\lib\" -Force
@@ -98,18 +100,18 @@ jobs:
           
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
 
-      - name: Upload static
+      - name: Upload static for ${{ matrix.arch }}
         if: github.event.inputs.build_type == 'static' || github.event.inputs.build_type == 'both'
         uses: actions/upload-artifact@v4
         with:
-          name: libcurl-${{ github.event.inputs.arch }}-static
+          name: libcurl-${{ matrix.arch }}-static
           path: libcurl-*-static.zip
 
-      - name: Upload shared
+      - name: Upload shared for ${{ matrix.arch }}
         if: github.event.inputs.build_type == 'shared' || github.event.inputs.build_type == 'both'
         uses: actions/upload-artifact@v4
         with:
-          name: libcurl-${{ github.event.inputs.arch }}-shared
+          name: libcurl-${{ matrix.arch }}-shared
           path: libcurl-*-shared.zip
 
   release:
@@ -135,6 +137,10 @@ jobs:
           body: |
             # libcurl ${{ github.ref_name }} for MSVC
             
+            ## Architectures
+            - x64 (64-bit)
+            - x86 (32-bit)
+            
             ## Library Files
             - libcurl.lib (static library)
             - libcurl_imp.lib (import library for DLL)
@@ -154,7 +160,7 @@ jobs:
             - advapi32.lib
             
             ## Static Build
-            - Use: libcurl.lib + dependencies
+            - Use: libcurl.lib + all dependency libs
             - Define: CURL_STATICLIB
             
             ## Dynamic Build
