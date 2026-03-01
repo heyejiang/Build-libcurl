@@ -89,26 +89,23 @@ jobs:
             - zlib compression
             
             ## Files
-            - `*-static.zip`: Static libraries (.lib) for MSVC
-            - `*-dynamic.zip`: Dynamic libraries (.dll + .lib) for MSVC
+            - *-static.zip: Static libraries (.lib) for MSVC
+            - *-dynamic.zip: Dynamic libraries (.dll + .lib) for MSVC
             
             ## Usage
             ### Static linking
-            ```cpp
             #define CURL_STATICLIB
             #include <curl/curl.h>
-            ```
+            
             Link with: libcurl.lib libssl.lib libcrypto.lib libssh2.lib nghttp2.lib psllib.lib zlib.lib ws2_32.lib crypt32.lib
             
             ### Dynamic linking
-            ```cpp
             #include <curl/curl.h>
-            ```
+            
             Link with: libcurl.lib
             Copy DLLs from bin/ to your executable directory.
-            
-files: artifacts/*
-draft: false
-prerelease: false
-env:
-GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: artifacts/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
