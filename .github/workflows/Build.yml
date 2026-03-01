@@ -35,10 +35,10 @@ jobs:
   build:
     runs-on: windows-latest
     
-    # 修复矩阵策略：根据输入动态生成矩阵
+    # 修复矩阵策略：使用更可靠的方法处理JSON
     strategy:
       matrix:
-        arch: ${{ fromJSON(format('[{0}]', github.event.inputs.arch || 'x64')) }}
+        arch: ${{ github.event.inputs.arch != '' && fromJSON(format('["{0}"]', github.event.inputs.arch)) || fromJSON('["x64", "x86", "x64_x86"]') }}
 
     steps:
       - name: Checkout repository
