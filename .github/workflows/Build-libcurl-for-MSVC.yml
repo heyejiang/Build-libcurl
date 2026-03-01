@@ -99,7 +99,7 @@ jobs:
             libssh2.h
             zlib.h
             nghttp2/
-
+          
           Visual Studio Configuration:
           1. Add include\ to: C/C++ > General > Additional Include Directories
           2. Add lib\ to: Linker > General > Additional Library Directories
@@ -120,7 +120,7 @@ jobs:
              advapi32.lib
              gdi32.lib
              kernel32.lib
-
+          
           Code Example:
           #define CURL_STATICLIB
           #include <curl/curl.h>
@@ -173,7 +173,7 @@ jobs:
               zlib.dll
               nghttp2.dll
               psl.dll
-
+          
             lib\*.lib  - Import libraries (required at link time)
               libcurl.lib          - curl import library
               libssl.lib           - OpenSSL import library
@@ -182,14 +182,14 @@ jobs:
               zlib.lib             - zlib import library
               nghttp2.lib          - HTTP/2 import library
               psl.lib              - libpsl import library
-
+          
             include\   - Header files
               curl/curl.h
               openssl/
               libssh2.h
               zlib.h
               nghttp2/
-
+          
           Visual Studio Configuration:
           1. Add include\ to: C/C++ > General > Additional Include Directories
           2. Add lib\ to: Linker > General > Additional Library Directories
@@ -199,7 +199,7 @@ jobs:
           
           Note: The import libraries (.lib) are for linking. The DLLs (.dll) are for runtime.
           When distributing your application, include all DLLs from bin\ folder.
-
+          
           Code Example:
           #include <curl/curl.h>
           
