@@ -68,11 +68,13 @@ jobs:
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
+          
           $src = "vcpkg\packages\curl_${{ github.event.inputs.arch }}-windows-static"
           if (Test-Path $src) {
             Copy-Item -Path "$src\lib\*.lib" -Destination "$dir\lib\" -Force
             Copy-Item -Path "$src\include\*" -Destination "$dir\include\" -Recurse -Force
           }
+          
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
 
       - name: Package shared
@@ -86,12 +88,14 @@ jobs:
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\bin" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
+          
           $src = "vcpkg\packages\curl_${{ github.event.inputs.arch }}-windows"
           if (Test-Path $src) {
             Copy-Item -Path "$src\bin\*.dll" -Destination "$dir\bin\" -Force
             Copy-Item -Path "$src\lib\*.lib" -Destination "$dir\lib\" -Force
             Copy-Item -Path "$src\include\*" -Destination "$dir\include\" -Recurse -Force
           }
+          
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
 
       - name: Upload static
@@ -129,9 +133,33 @@ jobs:
           name: libcurl ${{ github.ref_name }} for MSVC
           tag_name: ${{ github.ref_name }}
           body: |
-            libcurl ${{ github.ref_name }} for MSVC
-            Includes: libcurl.lib libssl.lib libcrypto.lib libssh2.lib nghttp2.lib psl.lib zlib.lib
-            System: ws2_32.lib crypt32.lib wldap32.lib bcrypt.lib
+            # libcurl ${{ github.ref_name }} for MSVC
+            
+            ## Library Files
+            - libcurl.lib (static library)
+            - libcurl_imp.lib (import library for DLL)
+            - libssl.lib
+            - libcrypto.lib
+            - libssh2.lib
+            - nghttp2.lib
+            - psl.lib
+            - zlib.lib
+            
+            ## System Libraries Required
+            - ws2_32.lib
+            - crypt32.lib
+            - wldap32.lib
+            - bcrypt.lib
+            - user32.lib
+            - advapi32.lib
+            
+            ## Static Build
+            - Use: libcurl.lib + dependencies
+            - Define: CURL_STATICLIB
+            
+            ## Dynamic Build
+            - Use: libcurl_imp.lib
+            - DLLs in bin/ folder
           files: artifacts/*.zip
           draft: false
           prerelease: false
