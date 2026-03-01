@@ -6,8 +6,12 @@ on:
       arch:
         description: Architecture
         required: true
-        default: 'x64,x86'
-        type: string
+        default: x64
+        type: choice
+        options:
+          - x64
+          - x86
+          - x64_x86
       build_type:
         description: Build Type
         required: true
@@ -30,16 +34,20 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-
+    
+    # 修复矩阵策略：根据输入动态生成矩阵
     strategy:
       matrix:
-        arch: ${{ fromJSON(format('[{0}]', github.event.inputs.arch)) }}
+        arch: ${{ fromJSON(format('[{0}]', github.event.inputs.arch || 'x64')) }}
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Setup Visual Studio
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: ${{ matrix.arch == 'x64' && 'x64' || 'x86' }}
+          arch: ${{ matrix.arch == 'x64' && 'x64' || (matrix.arch == 'x86' && 'x86' || 'amd64_x86') }}
 
       - name: Install vcpkg
         run: |
@@ -48,8 +56,14 @@ jobs:
 
       - name: Install dependencies for ${{ matrix.arch }}
         run: |
-          $triplet = "${{ matrix.arch }}-windows"
-          $triplet_static = "${{ matrix.arch }}-windows-static"
+          $arch = "${{ matrix.arch }}"
+          if ($arch -eq "x64_x86") {
+            $triplet_static = "x86-windows-static"
+            $triplet = "x86-windows"
+          } else {
+            $triplet_static = "$arch-windows-static"
+            $triplet = "$arch-windows"
+          }
           .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet $triplet_static
           .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet $triplet
 
@@ -57,10 +71,10 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $version = "8.18.0" 
-          if ("${{ github.ref }}" -match "refs/tags/v(.*)") { 
-            $version = $matches[1] 
-          } 
+          $version = "8.18.0"
+          if ("${{ github.ref }}" -match "refs/tags/v(.*)") {
+            $version = $matches[1]
+          }
           echo "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Package static for ${{ matrix.arch }}
@@ -69,12 +83,16 @@ jobs:
         run: |
           $ver = "${{ steps.version.outputs.version }}"
           $arch = "${{ matrix.arch }}"
-          $dir = "libcurl-${ver}-${arch}-static"
+          $arch_dir = $arch
+          if ($arch -eq "x64_x86") { $arch_dir = "x86" }
+          
+          $dir = "libcurl-${ver}-${arch_dir}-static"
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
 
-          $src = "vcpkg\packages\curl_${{ matrix.arch }}-windows-static"
+          $triplet = "$arch_dir-windows-static"
+          $src = "vcpkg\packages\curl_$triplet"
           if (Test-Path $src) {
             Copy-Item -Path "$src\lib\*.lib" -Destination "$dir\lib\" -Force
             Copy-Item -Path "$src\include\*" -Destination "$dir\include\" -Recurse -Force
@@ -83,7 +101,10 @@ jobs:
           # Copy static libraries for dependencies
           $dependencies = @("libssl", "libcrypto", "libssh2")
           foreach ($lib in $dependencies) {
-              Copy-Item -Path "vcpkg\packages\$lib_${{ matrix.arch }}-windows-static\lib\*.lib" -Destination "$dir\lib\" -Force
+              $dep_src = "vcpkg\packages\${lib}_$triplet"
+              if (Test-Path $dep_src) {
+                  Copy-Item -Path "$dep_src\lib\*.lib" -Destination "$dir\lib\" -Force
+              }
           }
 
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
@@ -94,23 +115,33 @@ jobs:
         run: |
           $ver = "${{ steps.version.outputs.version }}"
           $arch = "${{ matrix.arch }}"
-          $dir = "libcurl-${ver}-${arch}-shared"
+          $arch_dir = $arch
+          if ($arch -eq "x64_x86") { $arch_dir = "x86" }
+          
+          $dir = "libcurl-${ver}-${arch_dir}-shared"
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\bin" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
 
-          $src = "vcpkg\packages\curl_${{ matrix.arch }}-windows"
+          $triplet = "$arch_dir-windows"
+          $src = "vcpkg\packages\curl_$triplet"
           if (Test-Path $src) {
             Copy-Item -Path "$src\bin\*.dll" -Destination "$dir\bin\" -Force
             Copy-Item -Path "$src\lib\*.lib" -Destination "$dir\lib\" -Force
             Copy-Item -Path "$src\include\*" -Destination "$dir\include\" -Recurse -Force
           }
 
-          # Copy shared libraries for dependencies
+          # Copy import libraries for dependencies
           $dependencies = @("libssl", "libcrypto", "libssh2")
           foreach ($lib in $dependencies) {
-              Copy-Item -Path "vcpkg\packages\$lib_${{ matrix.arch }}-windows\lib\*.lib" -Destination "$dir\lib\" -Force
+              $dep_src = "vcpkg\packages\${lib}_$triplet"
+              if (Test-Path $dep_src) {
+                  Copy-Item -Path "$dep_src\lib\*.lib" -Destination "$dir\lib\" -Force
+                  if (Test-Path "$dep_src\bin") {
+                      Copy-Item -Path "$dep_src\bin\*.dll" -Destination "$dir\bin\" -Force
+                  }
+              }
           }
 
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
@@ -138,40 +169,138 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
 
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" =~ ^refs/tags/v(.*)$ ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+          else
+            VERSION="8.18.0"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update README.md
+        run: |
+          # 创建或更新README.md
+          cat > README.md << 'EOF'
+          # libcurl for MSVC
+
+          Pre-built libcurl binaries for Windows with MSVC.
+
+          ## Version ${{ steps.version.outputs.version }}
+
+          ## Features
+          - OpenSSL support
+          - SSH support (libssh2)
+          - HTTP/2 support (nghttp2)
+          - Public Suffix List (PSL)
+
+          ## Architectures
+          - x64 (64-bit)
+          - x86 (32-bit)
+
+          ## Library Files
+          - libcurl.lib (static library)
+          - libcurl_imp.lib (import library for DLL)
+          - libssl.lib
+          - libcrypto.lib
+          - libssh2.lib
+
+          ## System Libraries Required
+          - crypt32.lib
+          - bcrypt.lib (for OpenSSL)
+          - user32.lib (for OpenSSL)
+
+          ## Static Build
+          - Use: libcurl.lib + all dependency libs
+          - Define: `CURL_STATICLIB`
+          - Example: `target_link_libraries(your_target libcurl libssl libcrypto libssh2 crypt32 bcrypt user32)`
+
+          ## Dynamic Build
+          - Use: libcurl_imp.lib
+          - DLLs in bin/ folder
+          - Example: `target_link_libraries(your_target libcurl_imp)`
+
+          ## Downloads
+          EOF
+
+          # 添加下载链接
+          echo "" >> README.md
+          echo "### Static Libraries" >> README.md
+          for file in artifacts/libcurl-*-static.zip; do
+            if [ -f "$file" ]; then
+              name=$(basename "$file")
+              arch=$(echo "$name" | sed -E 's/libcurl-[0-9.]+-([^-]+)-static\.zip/\1/')
+              echo "- [$arch]($name)" >> README.md
+            fi
+          done
+
+          echo "" >> README.md
+          echo "### Shared Libraries" >> README.md
+          for file in artifacts/libcurl-*-shared.zip; do
+            if [ -f "$file" ]; then
+              name=$(basename "$file")
+              arch=$(echo "$name" | sed -E 's/libcurl-[0-9.]+-([^-]+)-shared\.zip/\1/')
+              echo "- [$arch]($name)" >> README.md
+            fi
+          done
+
+          # 将README.md添加到 artifacts 目录
+          cp README.md artifacts/
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           name: libcurl ${{ github.ref_name }} for MSVC
-          tag_name: ${{ github.ref_name }} 
+          tag_name: ${{ github.ref_name }}
           body: |
+            ## libcurl ${{ steps.version.outputs.version }} for MSVC
+
+            ## Features
+            - OpenSSL support
+            - SSH support (libssh2)
+            - HTTP/2 support (nghttp2)
+            - Public Suffix List (PSL)
+
             ## Architectures
-            - x64 (64-bit) 
-            - x86 (32-bit) 
-            
+            - x64 (64-bit)
+            - x86 (32-bit)
+
             ## Library Files
-            - libcurl.lib (static library) 
-            - libcurl_imp.lib (import library for DLL) 
+            - libcurl.lib (static library)
+            - libcurl_imp.lib (import library for DLL)
             - libssl.lib
             - libcrypto.lib
             - libssh2.lib
-            
+
             ## System Libraries Required
             - crypt32.lib
-            
+            - bcrypt.lib
+            - user32.lib
+
             ## Static Build
             - Use: libcurl.lib + all dependency libs
-            - Define: CURL_STATICLIB
-            
+            - Define: `CURL_STATICLIB`
+
             ## Dynamic Build
             - Use: libcurl_imp.lib
             - DLLs in bin/ folder
-          files: artifacts/*.zip
+
+            ## Notes
+            - Built with Visual Studio 2022
+            - Includes all necessary dependencies
+          files: |
+            artifacts/*.zip
+            artifacts/README.md
           draft: false
           prerelease: false
         env:
