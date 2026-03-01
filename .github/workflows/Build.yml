@@ -8,8 +8,15 @@ on:
         required: true
         default: 'master'
         type: string
+      build_type:
+        description: 'Build type: shared (DLL) or static (LIB)'
+        required: true
+        default: 'shared'
+        type: choice
+        options:
+          - shared
+          - static
 
-# 添加写入权限以创建 Release
 permissions:
   contents: write
 
@@ -38,14 +45,15 @@ jobs:
         run: |
           vcpkg install openssl c-ares zlib libssh2 nghttp2 msh3 --triplet x64-windows-static-md
 
-      - name: Configure CMake for Mixed Linkage
+      - name: Configure CMake for ${{ github.event.inputs.build_type }} build
         shell: pwsh
         run: |
+          $shared = "${{ github.event.inputs.build_type }}" -eq "shared"
           cmake -B build -G "Visual Studio 17 2022" -A ${{ matrix.arch }} `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET="x64-windows-static-md" `
             -DCMAKE_BUILD_TYPE=Release `
-            -DBUILD_SHARED_LIBS=ON `
+            -DBUILD_SHARED_LIBS=$(if ($shared) { "ON" } else { "OFF" }) `
             -DCURL_USE_OPENSSL=ON `
             -DENABLE_ARES=ON `
             -DCURL_ZLIB=ON `
@@ -64,62 +72,99 @@ jobs:
       - name: Collect and Package Artifacts
         shell: pwsh
         run: |
-          $dir = "libcurl-vc18-x64-release-dll-ssl-static-cares-static-zlib-static-ssh2-static-ipv6-sspi-nghttp2-static-msh3-static"
+          $buildType = "${{ github.event.inputs.build_type }}"
+          $typeSuffix = if ($buildType -eq "shared") { "dll" } else { "static" }
+          $dir = "libcurl-vc18-x64-release-$typeSuffix-ssl-static-cares-static-zlib-static-ssh2-static-ipv6-sspi-nghttp2-static-msh3-static"
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\bin" -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
-          Copy-Item -Path "build\lib\Release\*.dll" -Destination "$dir\bin\" -Force
+
+          # Copy DLLs (only for shared build)
+          if ($buildType -eq "shared") {
+            Copy-Item -Path "build\lib\Release\*.dll" -Destination "$dir\bin\" -Force
+          }
+
+          # Copy import/static libs from curl build
           Copy-Item -Path "build\lib\Release\*.lib" -Destination "$dir\lib\" -Force
 
-          if (Test-Path "$dir\lib\libcurl.lib") {
+          # Rename import lib for clarity (shared only)
+          if ($buildType -eq "shared" -and (Test-Path "$dir\lib\libcurl.lib")) {
             Rename-Item -Path "$dir\lib\libcurl.lib" -NewName "libcurl_imp.lib"
           }
+
+          # Copy headers
           Copy-Item -Path "include\curl\*" -Destination "$dir\include\" -Recurse -Force
-          $vcpkg_libs = "$env:VCPKG_INSTALLATION_ROOT\packages"
-          $deps = @("openssl", "zlib", "libssh2", "nghttp2", "c-ares", "msh3")
-          foreach ($lib in $deps) {
-              $src = "$vcpkg_libs\${lib}_x64-windows-static-md\lib"
-              if (Test-Path $src) {
-                  Copy-Item -Path "$src\*.lib" -Destination "$dir\lib\" -Force
-              }
+
+          # Copy dependency static libs only for static build
+          if ($buildType -eq "static") {
+            $vcpkg_libs = "$env:VCPKG_INSTALLATION_ROOT\packages"
+            $deps = @("openssl", "zlib", "libssh2", "nghttp2", "c-ares", "msh3")
+            foreach ($lib in $deps) {
+                $src = "$vcpkg_libs\${lib}_x64-windows-static-md\lib"
+                if (Test-Path $src) {
+                    Copy-Item -Path "$src\*.lib" -Destination "$dir\lib\" -Force
+                }
+            }
           }
-          $ReadmeContent = @"
-          ## Required System Libraries
-          When linking dynamically to libcurl_imp.lib, you must link:
-          - crypt32.lib
-          - ws2_32.lib
-          - wldap32.lib
-          - advapi32.lib
-          - bcrypt.lib
-          - user32.lib
-          "@
+
+          # Generate README according to build type
+          if ($buildType -eq "shared") {
+            $ReadmeContent = @"
+            ## Required System Libraries (DLL build)
+            When linking dynamically to `libcurl_imp.lib`, you must link:
+            - crypt32.lib
+            - ws2_32.lib
+            - wldap32.lib
+            - advapi32.lib
+            - bcrypt.lib
+            - user32.lib
+            
+            No additional static libraries from vcpkg are needed; they are already linked into `libcurl.dll`.
+            "@
+                      } else {
+                        $ReadmeContent = @"
+            ## Required Libraries (Static build)
+            When linking statically to `libcurl.lib`, you must also link all dependency static libraries (order matters):
+            - libcurl.lib
+            - libssl.lib
+            - libcrypto.lib
+            - zlib.lib
+            - libssh2.lib
+            - nghttp2.lib
+            - cares.lib
+            - msh3.lib
+            - crypt32.lib
+            - ws2_32.lib
+            - wldap32.lib
+            - advapi32.lib
+            - bcrypt.lib
+            - user32.lib
+            "@
+          }
           Out-File -FilePath "$dir\README.md" -InputObject $ReadmeContent -Encoding UTF8
+
+          # Create zip archive
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
+
+          # Set environment variable for later steps
+          echo "PACKAGE_DIR=$dir" >> $env:GITHUB_ENV
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libcurl-vc18-x64-mixed-build
-          path: libcurl-vc18-x64-release-dll-ssl-static-cares-static-zlib-static-ssh2-static-ipv6-sspi-nghttp2-static-msh3-static.zip
+          name: libcurl-vc18-x64-${{ github.event.inputs.build_type }}-build
+          path: ${{ env.PACKAGE_DIR }}.zip
 
-      # ===== 新增：自动创建 Release 并上传资产 =====
       - name: Create GitHub Release
-        id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          # 生成标签名：libcurl-<输入版本>-<运行ID>
-          tag_name: libcurl-${{ github.event.inputs.curl_version }}-${{ github.run_id }}
-          # 可读的 Release 名称
-          name: libcurl ${{ github.event.inputs.curl_version }} (x64) - Build ${{ github.run_id }}
-          # 如果输入版本包含 "master"，标记为预发布；否则为非草稿、非预发布
+          tag_name: libcurl-${{ github.event.inputs.curl_version }}-${{ github.event.inputs.build_type }}-${{ github.run_id }}
+          name: libcurl ${{ github.event.inputs.curl_version }} (${{ github.event.inputs.build_type }}, x64) - Build ${{ github.run_id }}
           prerelease: ${{ contains(github.event.inputs.curl_version, 'master') }}
-          # 非草稿
           draft: false
-          # 使用打包时生成的 README.md 作为 Release 说明
-          body_path: libcurl-vc18-x64-release-dll-ssl-static-cares-static-zlib-static-ssh2-static-ipv6-sspi-nghttp2-static-msh3-static/README.md
-          # 要上传的资产文件
+          body_path: ${{ env.PACKAGE_DIR }}/README.md
           files: |
-            libcurl-vc18-x64-release-dll-ssl-static-cares-static-zlib-static-ssh2-static-ipv6-sspi-nghttp2-static-msh3-static.zip
+            ${{ env.PACKAGE_DIR }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
