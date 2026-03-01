@@ -41,11 +41,13 @@ jobs:
         shell: pwsh
         run: |
           $shared = "${{ matrix.build_type }}" -eq "shared"
+          # 计算 BUILD_SHARED_LIBS 的值
+          $shared_flag = if ($shared) { "ON" } else { "OFF" }
           cmake -B build -G "Visual Studio 17 2022" -A ${{ matrix.arch }} `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET="x64-windows-static-md" `
             -DCMAKE_BUILD_TYPE=Release `
-            -DBUILD_SHARED_LIBS=$(if ($shared) { "ON" } else { "OFF" }) `
+            -DBUILD_SHARED_LIBS=$shared_flag `
             -DCURL_USE_OPENSSL=ON `
             -DENABLE_ARES=ON `
             -DCURL_ZLIB=ON `
@@ -140,7 +142,7 @@ jobs:
           $zipName = "$dir.zip"
           Compress-Archive -Path "$dir\*" -DestinationPath $zipName -Force
 
-          # Set output variable for artifact name
+          # Set environment variable for artifact name (正确语法)
           echo "artifact_name=$zipName" >> $env:GITHUB_ENV
 
       - name: Upload Artifact (per build type)
@@ -162,12 +164,12 @@ jobs:
         shell: bash
         run: |
           mkdir release-assets
-          # 查找所有 zip 文件并复制到统一目录
           find artifacts -name "*.zip" -exec cp {} release-assets/ \;
           echo "Release assets:"
           ls -la release-assets/
 
       - name: Create GitHub Release
+        id: create_release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: libcurl-${{ github.event.inputs.curl_version }}-${{ github.run_id }}
@@ -184,3 +186,44 @@ jobs:
           files: release-assets/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 检出仓库（默认分支）以更新 README.md
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 自动更新 README.md：添加最新 Release 链接
+      - name: Update README with latest release info
+        shell: bash
+        env:
+          TAG_NAME: ${{ steps.create_release.outputs.tag_name }}
+          RELEASE_NAME: ${{ steps.create_release.outputs.name }}
+          RELEASE_URL: https://github.com/${{ github.repository }}/releases/tag/${{ steps.create_release.outputs.tag_name }}
+        run: |
+          python3 - <<EOF
+          import re, os, datetime
+          with open('README.md', 'r') as f:
+              content = f.read()
+          start = "<!-- LATEST_RELEASE_START -->"
+          end = "<!-- LATEST_RELEASE_END -->"
+          release_name = os.environ['RELEASE_NAME']
+          release_url = os.environ['RELEASE_URL']
+          date = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+          new = f"{start}\n**Latest Release**: [{release_name}]({release_url}) - {date}\n{end}"
+          pattern = re.compile(re.escape(start) + '.*?' + re.escape(end), re.DOTALL)
+          if pattern.search(content):
+              content = pattern.sub(new, content)
+          else:
+              content = new + '\n\n' + content
+          with open('README.md', 'w') as f:
+              f.write(content)
+          EOF
+
+          # 提交并推送更改
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git diff --quiet && git diff --staged --quiet || git commit -m "docs: update README with latest release $TAG_NAME"
+          git push
