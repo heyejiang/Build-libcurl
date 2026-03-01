@@ -1,10 +1,10 @@
-name: Build libcurl for MSVC
+name: Build libcurl MSVC
 
 on:
   workflow_dispatch:
     inputs:
       arch:
-        description: Architecture (x64/x86)
+        description: Architecture
         required: true
         default: x64
         type: choice
@@ -12,7 +12,7 @@ on:
           - x64
           - x86
       build_type:
-        description: Build type (static/shared/both)
+        description: Build Type
         required: true
         default: both
         type: choice
@@ -58,6 +58,7 @@ jobs:
             $version = $matches[1]
           }
           echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "date=$(Get-Date -Format yyyy-MM-dd)" >> $env:GITHUB_OUTPUT
 
       - name: Package static
         if: github.event.inputs.build_type == 'static' || github.event.inputs.build_type == 'both'
@@ -65,39 +66,73 @@ jobs:
         run: |
           $ver = "${{ steps.version.outputs.version }}"
           $arch = "${{ github.event.inputs.arch }}"
+          $date = "${{ steps.version.outputs.date }}"
           $dir = "libcurl-${ver}-${arch}-static"
+          
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
+          
           $src = "vcpkg\packages\curl_${{ github.event.inputs.arch }}-windows-static"
           if (Test-Path $src) {
             Copy-Item -Path "$src\lib\*.lib" -Destination "$dir\lib\" -Force
             Copy-Item -Path "$src\include\*" -Destination "$dir\include\" -Recurse -Force
           }
-          @"
-libcurl $ver for MSVC (Static)
-Architecture: $arch
+          
+          $readme = @"
+libcurl $ver for MSVC ($arch)
+Build Type: Static Library
+Build Date: $date
 
-Files in lib:
-- libcurl.lib
-- libssl.lib
-- libcrypto.lib
-- libssh2.lib
-- zlib.lib
-- nghttp2.lib
-- psl.lib
+Library Files (lib\):
+  libcurl.lib          - main curl library
+  libssl.lib           - OpenSSL SSL library
+  libcrypto.lib        - OpenSSL crypto library
+  libssh2.lib          - SSH2 library
+  zlib.lib             - compression library
+  nghttp2.lib          - HTTP/2 library
+  psl.lib              - Public Suffix List library
 
-Visual Studio Setup:
-1. Add include\ to Additional Include Directories
-2. Add lib\ to Additional Library Directories
-3. Add CURL_STATICLIB to Preprocessor Definitions
-4. Add to Additional Dependencies:
-   libcurl.lib libssl.lib libcrypto.lib libssh2.lib zlib.lib nghttp2.lib psl.lib ws2_32.lib crypt32.lib wldap32.lib bcrypt.lib
+Header Files (include\):
+  curl/curl.h
+  openssl/...
+  libssh2.h
+  zlib.h
+  nghttp2/...
 
-Code:
-#define CURL_STATICLIB
-#include <curl/curl.h>
-"@ | Out-File -FilePath "$dir\README.txt" -Encoding ASCII
+Visual Studio Configuration:
+1. Add include\ to: C/C++ > General > Additional Include Directories
+2. Add lib\ to: Linker > General > Additional Library Directories
+3. Add to: C/C++ > Preprocessor > Preprocessor Definitions: CURL_STATICLIB
+4. Add to: Linker > Input > Additional Dependencies:
+   libcurl.lib
+   libssl.lib
+   libcrypto.lib
+   libssh2.lib
+   zlib.lib
+   nghttp2.lib
+   psl.lib
+   ws2_32.lib
+   crypt32.lib
+   wldap32.lib
+   bcrypt.lib
+   user32.lib
+
+Code Example:
+  #define CURL_STATICLIB
+  #include <curl/curl.h>
+  
+  int main() {
+      CURL* curl = curl_easy_init();
+      if (curl) {
+          curl_easy_setopt(curl, CURLOPT_URL, "https://example.com");
+          curl_easy_perform(curl);
+          curl_easy_cleanup(curl);
+      }
+      return 0;
+  }
+"@
+          $readme | Out-File -FilePath "$dir\README.txt" -Encoding ASCII
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
 
       - name: Package shared
@@ -106,51 +141,72 @@ Code:
         run: |
           $ver = "${{ steps.version.outputs.version }}"
           $arch = "${{ github.event.inputs.arch }}"
+          $date = "${{ steps.version.outputs.date }}"
           $dir = "libcurl-${ver}-${arch}-shared"
+          
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\bin" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
+          
           $src = "vcpkg\packages\curl_${{ github.event.inputs.arch }}-windows"
           if (Test-Path $src) {
             Copy-Item -Path "$src\bin\*.dll" -Destination "$dir\bin\" -Force
             Copy-Item -Path "$src\lib\*.lib" -Destination "$dir\lib\" -Force
             Copy-Item -Path "$src\include\*" -Destination "$dir\include\" -Recurse -Force
           }
-          @"
-libcurl $ver for MSVC (Shared)
-Architecture: $arch
+          
+          $readme = @"
+libcurl $ver for MSVC ($arch)
+Build Type: Dynamic Link Library (DLL)
+Build Date: $date
 
 Files:
-bin\ - DLL files (required at runtime)
-  libcurl.dll
-  libssl.dll
-  libcrypto.dll
-  libssh2.dll
-  zlib.dll
-  nghttp2.dll
-  psl.dll
+  bin\*.dll  - DLL files (required at runtime)
+    libcurl.dll
+    libssl.dll
+    libcrypto.dll
+    libssh2.dll
+    zlib.dll
+    nghttp2.dll
+    psl.dll
 
-lib\ - Import libraries (.lib)
-  libcurl.lib
-  libssl.lib
-  libcrypto.lib
-  libssh2.lib
-  zlib.lib
-  nghttp2.lib
-  psl.lib
+  lib\*.lib  - Import libraries (required at link time)
+    libcurl.lib
+    libssl.lib
+    libcrypto.lib
+    libssh2.lib
+    zlib.lib
+    nghttp2.lib
+    psl.lib
 
-include\ - Header files
+  include\   - Header files
+    curl/curl.h
+    openssl/...
+    libssh2.h
+    zlib.h
+    nghttp2/...
 
-Visual Studio Setup:
-1. Add include\ to Additional Include Directories
-2. Add lib\ to Additional Library Directories
-3. Add libcurl.lib to Additional Dependencies
-4. Copy all DLLs from bin\ to your executable directory
+Visual Studio Configuration:
+1. Add include\ to: C/C++ > General > Additional Include Directories
+2. Add lib\ to: Linker > General > Additional Library Directories
+3. Add to: Linker > Input > Additional Dependencies: libcurl.lib
+4. Copy all DLLs from bin\ to your executable directory or add bin\ to PATH
 
-Code:
-#include <curl/curl.h>
-"@ | Out-File -FilePath "$dir\README.txt" -Encoding ASCII
+Code Example:
+  #include <curl/curl.h>
+  
+  int main() {
+      CURL* curl = curl_easy_init();
+      if (curl) {
+          curl_easy_setopt(curl, CURLOPT_URL, "https://example.com");
+          curl_easy_perform(curl);
+          curl_easy_cleanup(curl);
+      }
+      return 0;
+  }
+"@
+          $readme | Out-File -FilePath "$dir\README.txt" -Encoding ASCII
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
 
       - name: Upload static
@@ -179,6 +235,7 @@ Code:
         with:
           path: artifacts
           merge-multiple: true
+          
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -186,22 +243,32 @@ Code:
           tag_name: ${{ github.ref_name }}
           body: |
             libcurl ${{ github.ref_name }} for MSVC
-            
-            Build with vcpkg, includes:
+
+            Built with vcpkg, includes:
             - OpenSSL 3.x
             - libssh2 1.11.0
             - zlib 1.3.1
             - nghttp2 (HTTP/2)
             - libpsl
-            
-            Architectures: x64 / x86
-            Build types: static / shared
-            
+
+            Architectures:
+            - x64 (64-bit)
+            - x86 (32-bit)
+
+            Build Types:
+            - static: Static library (.lib)
+            - shared: Dynamic library (DLL + .lib)
+
             Each package contains:
             - include/ - Header files
-            - lib/ - .lib files
-            - bin/ - .dll files (shared only)
-            - README.txt - Usage instructions
+            - lib/ - Library files (.lib)
+            - bin/ - DLL files (shared only)
+            - README.txt - Detailed usage instructions
+
+            To use:
+            1. Download the appropriate zip file
+            2. Extract to your project
+            3. Follow README.txt for Visual Studio configuration
           files: artifacts/*.zip
           draft: false
           prerelease: false
