@@ -68,45 +68,72 @@ jobs:
           $arch = "${{ github.event.inputs.arch }}"
           $date = "${{ steps.version.outputs.date }}"
           $dir = "libcurl-${ver}-${arch}-static"
+          
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
+          
           $src = "vcpkg\packages\curl_${{ github.event.inputs.arch }}-windows-static"
           if (Test-Path $src) {
             Copy-Item -Path "$src\lib\*.lib" -Destination "$dir\lib\" -Force
             Copy-Item -Path "$src\include\*" -Destination "$dir\include\" -Recurse -Force
           }
+          
           $readme = @"
           libcurl $ver for MSVC ($arch)
           Build Type: Static Library
           Build Date: $date
           
-          Library Files:
-            lib\libcurl.lib
-            lib\libssl.lib
-            lib\libcrypto.lib
-            lib\libssh2.lib
-            lib\zlib.lib
-            lib\nghttp2.lib
-            lib\psl.lib
+          Library Files (lib\):
+            libcurl.lib           - main curl library
+            libssl.lib            - OpenSSL SSL library
+            libcrypto.lib         - OpenSSL crypto library
+            libssh2.lib           - SSH2 library
+            zlib.lib              - compression library
+            nghttp2.lib           - HTTP/2 library
+            psl.lib               - Public Suffix List library
           
-          Header Files:
-            include\curl\curl.h
-            include\openssl\
-            include\libssh2.h
-            include\zlib.h
-            include\nghttp2\
-          
-          Visual Studio Setup:
-          1. Include Directories: add include\
-          2. Library Directories: add lib\
-          3. Preprocessor Definitions: add CURL_STATICLIB
-          4. Additional Dependencies:
-             libcurl.lib libssl.lib libcrypto.lib libssh2.lib zlib.lib nghttp2.lib psl.lib ws2_32.lib crypt32.lib wldap32.lib bcrypt.lib user32.lib
-          
-          Code:
+          Header Files (include\):
+            curl/curl.h
+            openssl/
+            libssh2.h
+            zlib.h
+            nghttp2/
+
+          Visual Studio Configuration:
+          1. Add include\ to: C/C++ > General > Additional Include Directories
+          2. Add lib\ to: Linker > General > Additional Library Directories
+          3. Add to: C/C++ > Preprocessor > Preprocessor Definitions: CURL_STATICLIB
+          4. Add to: Linker > Input > Additional Dependencies:
+             libcurl.lib
+             libssl.lib
+             libcrypto.lib
+             libssh2.lib
+             zlib.lib
+             nghttp2.lib
+             psl.lib
+             ws2_32.lib
+             crypt32.lib
+             wldap32.lib
+             bcrypt.lib
+             user32.lib
+             advapi32.lib
+             gdi32.lib
+             kernel32.lib
+
+          Code Example:
           #define CURL_STATICLIB
           #include <curl/curl.h>
+          
+          int main() {
+              CURL* curl = curl_easy_init();
+              if (curl) {
+                  curl_easy_setopt(curl, CURLOPT_URL, "https://example.com");
+                  curl_easy_perform(curl);
+                  curl_easy_cleanup(curl);
+              }
+              return 0;
+          }
           "@
           $readme | Out-File -FilePath "$dir\README.txt" -Encoding ASCII
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
@@ -119,34 +146,72 @@ jobs:
           $arch = "${{ github.event.inputs.arch }}"
           $date = "${{ steps.version.outputs.date }}"
           $dir = "libcurl-${ver}-${arch}-shared"
+          
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\bin" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
+          
           $src = "vcpkg\packages\curl_${{ github.event.inputs.arch }}-windows"
           if (Test-Path $src) {
             Copy-Item -Path "$src\bin\*.dll" -Destination "$dir\bin\" -Force
             Copy-Item -Path "$src\lib\*.lib" -Destination "$dir\lib\" -Force
             Copy-Item -Path "$src\include\*" -Destination "$dir\include\" -Recurse -Force
           }
+          
           $readme = @"
           libcurl $ver for MSVC ($arch)
-          Build Type: Dynamic Library (DLL)
+          Build Type: Dynamic Link Library (DLL)
           Build Date: $date
           
           Files:
-            bin\*.dll  - DLL files (runtime)
-            lib\*.lib  - Import libraries (link time)
+            bin\*.dll  - DLL files (required at runtime)
+              libcurl.dll
+              libssl.dll
+              libcrypto.dll
+              libssh2.dll
+              zlib.dll
+              nghttp2.dll
+              psl.dll
+
+            lib\*.lib  - Import libraries (required at link time)
+              libcurl.lib          - curl import library
+              libssl.lib           - OpenSSL import library
+              libcrypto.lib        - OpenSSL crypto import library
+              libssh2.lib          - SSH2 import library
+              zlib.lib             - zlib import library
+              nghttp2.lib          - HTTP/2 import library
+              psl.lib              - libpsl import library
+
             include\   - Header files
+              curl/curl.h
+              openssl/
+              libssh2.h
+              zlib.h
+              nghttp2/
 
-          Visual Studio Setup:
-          1. Include Directories: add include\
-          2. Library Directories: add lib\
-          3. Additional Dependencies: libcurl.lib
-          4. Copy bin\*.dll to executable directory
+          Visual Studio Configuration:
+          1. Add include\ to: C/C++ > General > Additional Include Directories
+          2. Add lib\ to: Linker > General > Additional Library Directories
+          3. Add to: Linker > Input > Additional Dependencies:
+             libcurl.lib
+          4. Copy all DLLs from bin\ to your executable directory or add bin\ to PATH
+          
+          Note: The import libraries (.lib) are for linking. The DLLs (.dll) are for runtime.
+          When distributing your application, include all DLLs from bin\ folder.
 
-          Code:
+          Code Example:
           #include <curl/curl.h>
+          
+          int main() {
+              CURL* curl = curl_easy_init();
+              if (curl) {
+                  curl_easy_setopt(curl, CURLOPT_URL, "https://example.com");
+                  curl_easy_perform(curl);
+                  curl_easy_cleanup(curl);
+              }
+              return 0;
+          }
           "@
           $readme | Out-File -FilePath "$dir\README.txt" -Encoding ASCII
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
@@ -177,6 +242,7 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+          
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -184,9 +250,31 @@ jobs:
           tag_name: ${{ github.ref_name }}
           body: |
             libcurl ${{ github.ref_name }} for MSVC
-            Includes: OpenSSL, libssh2, zlib, nghttp2, libpsl
-            Architectures: x64, x86
-            Build Types: static (.lib), shared (DLL + .lib)
+
+            Built with vcpkg, includes:
+            - OpenSSL 3.x (libssl.lib, libcrypto.lib)
+            - libssh2 1.11.0 (libssh2.lib)
+            - zlib 1.3.1 (zlib.lib)
+            - nghttp2 (nghttp2.lib)
+            - libpsl (psl.lib)
+
+            Architectures:
+            - x64 (64-bit)
+            - x86 (32-bit)
+
+            Build Types:
+            - static: Static libraries (.lib)
+              Requires: libcurl.lib + libssl.lib + libcrypto.lib + libssh2.lib + zlib.lib + nghttp2.lib + psl.lib + ws2_32.lib + crypt32.lib + wldap32.lib + bcrypt.lib
+
+            - shared: Dynamic libraries (DLL + .lib)
+              DLLs: libcurl.dll, libssl.dll, libcrypto.dll, libssh2.dll, zlib.dll, nghttp2.dll, psl.dll
+              Import libs: libcurl.lib, libssl.lib, libcrypto.lib, libssh2.lib, zlib.lib, nghttp2.lib, psl.lib
+
+            Each package contains:
+            - include/ - Header files
+            - lib/ - Library files (.lib)
+            - bin/ - DLL files (shared only)
+            - README.txt - Detailed usage instructions
           files: artifacts/*.zip
           draft: false
           prerelease: false
