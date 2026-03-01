@@ -1,91 +1,227 @@
-name: Build libcurl for MinGW
+name: Build libcurl MSVC
 
 on:
   workflow_dispatch:
     inputs:
       arch:
-        default: 'x86_64'
+        description: 'Architecture (x64/x86)'
+        required: true
+        default: 'x64'
+        type: choice
+        options:
+          - x64
+          - x86
+      build_type:
+        description: 'Build type (static/shared/both)'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - static
+          - shared
+          - both
   push:
     tags:
       - 'v*'
 
 jobs:
-  build-mingw:
+  build-msvc:
     runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
     
     steps:
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Visual Studio environment
+        uses: ilammy/msvc-dev-cmd@v1
         with:
-          msystem: MINGW64
-          update: true
-          install: |
-            mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-openssl
-            mingw-w64-x86_64-libssh2
-            mingw-w64-x86_64-zlib
-            git
-            base-devel
+          arch: ${{ github.event.inputs.arch }}
 
-      - name: Checkout curl source
+      - name: Install vcpkg
         run: |
-          git clone --depth 1 https://github.com/curl/curl.git
-          cd curl
+          git clone https://github.com/Microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
 
-      - name: Build curl static
+      - name: Build dependencies with vcpkg (static)
+        if: github.event.inputs.build_type == 'static' || github.event.inputs.build_type == 'both'
         run: |
-          cd curl
-          mkdir build-static
-          cd build-static
-          cmake .. -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/c/curl-mingw-static \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DCURL_STATICLIB=ON \
-            -DCMAKE_USE_OPENSSL=ON \
-            -DCMAKE_USE_LIBSSH2=ON \
-            -DUSE_ZLIB=ON \
-            -DHTTP_ONLY=OFF \
-            -DENABLE_IPV6=ON \
-            -DBUILD_CURL_EXE=OFF \
-            -DBUILD_TESTING=OFF
+          .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet ${{ github.event.inputs.arch }}-windows-static
+
+      - name: Build dependencies with vcpkg (dynamic)
+        if: github.event.inputs.build_type == 'shared' || github.event.inputs.build_type == 'both'
+        run: |
+          .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet ${{ github.event.inputs.arch }}-windows
+
+      - name: Get version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "8.18.0"
+          if ("${{ github.ref }}" -match "refs/tags/v(.*)") {
+            $version = $matches[1]
+          }
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Package static libraries (.lib)
+        if: github.event.inputs.build_type == 'static' || github.event.inputs.build_type == 'both'
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.version.outputs.version }}"
+          $arch = "${{ github.event.inputs.arch }}"
           
-          cmake --build . --config Release
-          cmake --install .
-
-      - name: Build curl shared
-        run: |
-          cd curl
-          mkdir build-shared
-          cd build-shared
-          cmake .. -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/c/curl-mingw-shared \
-            -DBUILD_SHARED_LIBS=ON \
-            -DCMAKE_USE_OPENSSL=ON \
-            -DCMAKE_USE_LIBSSH2=ON \
-            -DUSE_ZLIB=ON \
-            -DHTTP_ONLY=OFF \
-            -DENABLE_IPV6=ON \
-            -DBUILD_CURL_EXE=OFF \
-            -DBUILD_TESTING=OFF
+          New-Item -ItemType Directory -Path libcurl-${ver}-${arch}-static -Force
+          New-Item -ItemType Directory -Path libcurl-${ver}-${arch}-static\lib -Force
+          New-Item -ItemType Directory -Path libcurl-${ver}-${arch}-static\include -Force
           
-          cmake --build . --config Release
-          cmake --install .
+          $vcpkgPath = "vcpkg\packages\curl_${{ github.event.inputs.arch }}-windows-static"
+          if (Test-Path $vcpkgPath) {
+            Copy-Item -Path "$vcpkgPath\lib\*.lib" -Destination "libcurl-${ver}-${arch}-static\lib\" -Force
+            Copy-Item -Path "$vcpkgPath\include\*" -Destination "libcurl-${ver}-${arch}-static\include\" -Recurse -Force
+          }
+          
+          @"
+libcurl $ver for MSVC (Static)
+Architecture: $arch
+Build Date: $((Get-Date).ToString('yyyy-MM-dd'))
 
-      - name: Package artifacts
+Files in lib\:
+libcurl.lib
+libssl.lib
+libcrypto.lib
+libssh2.lib
+zlib.lib
+nghttp2.lib
+psl.lib
+
+Visual Studio Setup:
+1. Include Directories: add include\ folder
+2. Library Directories: add lib\ folder
+3. Preprocessor Definitions: add CURL_STATICLIB
+4. Additional Dependencies:
+   libcurl.lib
+   libssl.lib
+   libcrypto.lib
+   libssh2.lib
+   zlib.lib
+   nghttp2.lib
+   psl.lib
+   ws2_32.lib
+   crypt32.lib
+   wldap32.lib
+   bcrypt.lib
+
+Code:
+#define CURL_STATICLIB
+#include <curl/curl.h>
+"@ | Out-File -FilePath "libcurl-${ver}-${arch}-static\README.txt" -Encoding ASCII
+
+          Compress-Archive -Path "libcurl-${ver}-${arch}-static\*" -DestinationPath "libcurl-${ver}-${arch}-static.zip" -Force
+
+      - name: Package shared libraries (.lib + .dll)
+        if: github.event.inputs.build_type == 'shared' || github.event.inputs.build_type == 'both'
+        shell: pwsh
         run: |
-          cd /c
-          tar -czf curl-mingw-static.tar.gz curl-mingw-static/
-          tar -czf curl-mingw-shared.tar.gz curl-mingw-shared/
+          $ver = "${{ steps.version.outputs.version }}"
+          $arch = "${{ github.event.inputs.arch }}"
+          
+          New-Item -ItemType Directory -Path libcurl-${ver}-${arch}-shared -Force
+          New-Item -ItemType Directory -Path libcurl-${ver}-${arch}-shared\lib -Force
+          New-Item -ItemType Directory -Path libcurl-${ver}-${arch}-shared\bin -Force
+          New-Item -ItemType Directory -Path libcurl-${ver}-${arch}-shared\include -Force
+          
+          $vcpkgPath = "vcpkg\packages\curl_${{ github.event.inputs.arch }}-windows"
+          if (Test-Path $vcpkgPath) {
+            Copy-Item -Path "$vcpkgPath\bin\*.dll" -Destination "libcurl-${ver}-${arch}-shared\bin\" -Force
+            Copy-Item -Path "$vcpkgPath\lib\*.lib" -Destination "libcurl-${ver}-${arch}-shared\lib\" -Force
+            Copy-Item -Path "$vcpkgPath\include\*" -Destination "libcurl-${ver}-${arch}-shared\include\" -Recurse -Force
+          }
+          
+          @"
+libcurl $ver for MSVC (Dynamic)
+Architecture: $arch
+Build Date: $((Get-Date).ToString('yyyy-MM-dd'))
 
-      - name: Upload artifacts
+Files:
+bin\ - DLL files (required at runtime)
+  libcurl.dll
+  libssl.dll
+  libcrypto.dll
+  libssh2.dll
+  zlib.dll
+  nghttp2.dll
+  psl.dll
+
+lib\ - Import libraries (.lib)
+  libcurl.lib
+  libssl.lib
+  libcrypto.lib
+  libssh2.lib
+  zlib.lib
+  nghttp2.lib
+  psl.lib
+
+include\ - Header files
+
+Visual Studio Setup:
+1. Include Directories: add include\ folder
+2. Library Directories: add lib\ folder
+3. Additional Dependencies: libcurl.lib
+4. Copy all DLLs from bin\ to your executable directory or add bin\ to PATH
+
+Code:
+#include <curl/curl.h>
+"@ | Out-File -FilePath "libcurl-${ver}-${arch}-shared\README.txt" -Encoding ASCII
+
+          Compress-Archive -Path "libcurl-${ver}-${arch}-shared\*" -DestinationPath "libcurl-${ver}-${arch}-shared.zip" -Force
+
+      - name: Upload static artifacts
+        if: github.event.inputs.build_type == 'static' || github.event.inputs.build_type == 'both'
         uses: actions/upload-artifact@v4
         with:
-          name: libcurl-mingw-${{ github.event.inputs.arch }}
-          path: C:\*.tar.gz
+          name: libcurl-${{ github.event.inputs.arch }}-static
+          path: libcurl-*-static.zip
+
+      - name: Upload shared artifacts
+        if: github.event.inputs.build_type == 'shared' || github.event.inputs.build_type == 'both'
+        uses: actions/upload-artifact@v4
+        with:
+          name: libcurl-${{ github.event.inputs.arch }}-shared
+          path: libcurl-*-shared.zip
+
+  release:
+    needs: build-msvc
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: libcurl ${{ github.ref_name }} for MSVC
+          tag_name: ${{ github.ref_name }}
+          body: |
+            libcurl ${{ github.ref_name }} for MSVC
+            
+            Build with vcpkg, includes:
+            - OpenSSL
+            - libssh2
+            - zlib
+            - nghttp2
+            - libpsl
+            
+            Architectures: x64 / x86
+            Build types: static / shared
+            
+            See README.txt in each package for usage instructions.
+          files: artifacts/*.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
