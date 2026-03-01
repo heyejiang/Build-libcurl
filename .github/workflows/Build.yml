@@ -1,642 +1,115 @@
 name: Build libcurl with CMake
 
-on:
-  workflow_dispatch:
-    inputs:
-      arch:
-        description: Architecture
+on: 
+  workflow_dispatch: 
+    inputs: 
+      curl_version:
+        description: 'Curl version tag (e.g., curl-8_6_0)'
         required: true
-        default: x64
-        type: choice
-        options:
-          - x64
-          - x86
-          - x64_x86
-      build_type:
-        description: Build Type
-        required: true
-        default: both
-        type: choice
-        options:
-          - static
-          - shared
-          - both
-      create_release:
-        description: Create Release (requires tag)
-        required: false
-        default: false
-        type: boolean
+        default: 'master'
+        type: string
 
-  push:
-    tags:
-      - v*
-
-jobs:
-  build:
+jobs: 
+  build: 
     runs-on: windows-latest
     
-    strategy:
-      matrix:
-        arch: ${{ github.event.inputs.arch != '' && fromJSON(format('["{0}"]', github.event.inputs.arch)) || fromJSON('["x64", "x86", "x64_x86"]') }}
+    # 修复了 JSON 解析问题，直接显式指定架构避免复杂字符串造成的运行时错误
+    strategy: 
+      matrix: 
+        arch: [x64]
 
-    steps:
-      - name: Checkout repository
+    steps: 
+      - name: Checkout curl source
         uses: actions/checkout@v4
+        with:
+          repository: curl/curl
+          ref: ${{ github.event.inputs.curl_version }}
 
       - name: Setup Visual Studio
         uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: ${{ matrix.arch == 'x64' && 'x64' || (matrix.arch == 'x86' && 'x86' || 'amd64_x86') }}
+        with: 
+          arch: ${{ matrix.arch }}
 
-      - name: Install vcpkg
-        run: |
-          git clone https://github.com/Microsoft/vcpkg.git
-          .\vcpkg\bootstrap-vcpkg.bat
-
-      # 新增：vcpkg 缓存（下载、二进制包、已安装文件）
-      - name: Cache vcpkg
-        uses: actions/cache@v4
-        with:
-          path: |
-            vcpkg/downloads
-            vcpkg/packages
-            vcpkg/installed
-          key: vcpkg-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.github/workflows/Build.yml') }}
-          restore-keys: |
-            vcpkg-${{ runner.os }}-${{ matrix.arch }}-
-          save-always: true
-
-      - name: Install dependencies for ${{ matrix.arch }}
-        run: |
-          $arch = "${{ matrix.arch }}"
-          if ($arch -eq "x64_x86") {
-            $triplet_static = "x86-windows-static"
-            $triplet = "x86-windows"
-          } else {
-            $triplet_static = "$arch-windows-static"
-            $triplet = "$arch-windows"
-          }
-          
-          # 安装所有依赖（如有缓存将跳过编译）
-          .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet $triplet_static
-          .\vcpkg\vcpkg install curl[openssl,ssh,http2,psl] --triplet $triplet
-          
-          # 确保所有依赖的头文件也被安装
-          .\vcpkg\vcpkg install openssl libssh2 nghttp2 libpsl zlib --triplet $triplet_static
-          .\vcpkg\vcpkg install openssl libssh2 nghttp2 libpsl zlib --triplet $triplet
-
-      # 其余步骤（获取版本、打包、上传）保持不变...
-      - name: Get version
-        id: version
+      - name: Install static dependencies via vcpkg
         shell: pwsh
-        run: |
-          $version = "8.18.0"
-          if ("${{ github.ref }}" -match "refs/tags/v(.*)") {
-            $version = $matches[1]
-          }
-          echo "version=$version" >> $env:GITHUB_OUTPUT
+        run: | 
+          # 使用 static-md 包类型：依赖库编译为静态文件，关联多线程动态运行时 DLL
+          # 这是“动态编译 libcurl，同时把相关组件静态打包进 dll 中”的唯一正确做法
+          vcpkg install openssl c-ares zlib libssh2 nghttp2 msh3 --triplet x64-windows-static-md
 
-      - name: Package static for ${{ matrix.arch }}
-        if: github.event.inputs.build_type == 'static' || github.event.inputs.build_type == 'both'
+      - name: Configure CMake for Mixed Linkage
         shell: pwsh
-        run: |
-          $ver = "${{ steps.version.outputs.version }}"
-          $arch = "${{ matrix.arch }}"
-          $arch_dir = $arch
-          if ($arch -eq "x64_x86") { $arch_dir = "x86" }
-          
-          $dir = "libcurl-${ver}-${arch_dir}-static"
+        run: | 
+          # 配置 CMake
+          cmake -B build -G "Visual Studio 17 2022" -A ${{ matrix.arch }} `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET="x64-windows-static-md" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_SHARED_LIBS=ON `
+            -DCURL_USE_OPENSSL=ON `
+            -DENABLE_ARES=ON `
+            -DCURL_ZLIB=ON `
+            -DCURL_USE_LIBSSH2=ON `
+            -DENABLE_IPV6=ON `
+            -DUSE_WINDOWS_SSPI=ON `
+            -DUSE_NGHTTP2=ON `
+            -DUSE_MSH3=ON
+
+      - name: Build libcurl
+        shell: pwsh
+        run: | 
+          cmake --build build --config Release --parallel
+
+      - name: Collect and Package Artifacts
+        shell: pwsh
+        run: | 
+          # 按照你要求的名称创建归档文件夹
+          $dir = "libcurl-vc18-x64-release-dll-ssl-static-cares-static-zlib-static-ssh2-static-ipv6-sspi-nghttp2-static-msh3-static"
           New-Item -ItemType Directory -Path $dir -Force
-          New-Item -ItemType Directory -Path "$dir\lib" -Force
-          New-Item -ItemType Directory -Path "$dir\include" -Force
-          New-Item -ItemType Directory -Path "$dir\include\openssl" -Force
-          New-Item -ItemType Directory -Path "$dir\include\curl" -Force
-          New-Item -ItemType Directory -Path "$dir\lib\pkgconfig" -Force
-
-          $triplet = "$arch_dir-windows-static"
-          
-          # Copy curl files
-          $curl_src = "vcpkg\packages\curl_$triplet"
-          if (Test-Path $curl_src) {
-            Copy-Item -Path "$curl_src\lib\*.lib" -Destination "$dir\lib\" -Force
-            Copy-Item -Path "$curl_src\include\curl\*.h" -Destination "$dir\include\curl\" -Force
-            if (Test-Path "$curl_src\lib\pkgconfig") {
-              Copy-Item -Path "$curl_src\lib\pkgconfig\*" -Destination "$dir\lib\pkgconfig\" -Force
-            }
-          }
-
-          # Copy OpenSSL headers and libraries
-          $openssl_src = "vcpkg\packages\openssl_$triplet"
-          if (Test-Path $openssl_src) {
-            # Copy OpenSSL headers
-            if (Test-Path "$openssl_src\include\openssl") {
-              Copy-Item -Path "$openssl_src\include\openssl\*.h" -Destination "$dir\include\openssl\" -Force
-            }
-            # Copy OpenSSL libraries
-            if (Test-Path "$openssl_src\lib\*.lib") {
-              Copy-Item -Path "$openssl_src\lib\*.lib" -Destination "$dir\lib\" -Force
-            }
-          }
-
-          # Copy all other dependency libraries and headers
-          $dependencies = @(
-            @{name="libssh2"; headers=$true},
-            @{name="nghttp2"; headers=$true},
-            @{name="psl"; headers=$true},
-            @{name="zlib"; headers=$true}
-          )
-          
-          foreach ($dep in $dependencies) {
-              $dep_src = "vcpkg\packages\$($dep.name)_$triplet"
-              if (Test-Path $dep_src) {
-                  # Copy static libraries
-                  if (Test-Path "$dep_src\lib\*.lib") {
-                      Copy-Item -Path "$dep_src\lib\*.lib" -Destination "$dir\lib\" -Force
-                  }
-                  # Copy headers if they exist
-                  if ($dep.headers -and (Test-Path "$dep_src\include")) {
-                      $dep_include_dir = "$dir\include\$($dep.name)"
-                      New-Item -ItemType Directory -Path $dep_include_dir -Force -ErrorAction SilentlyContinue
-                      Copy-Item -Path "$dep_src\include\*" -Destination $dep_include_dir -Recurse -Force
-                  }
-                  # Copy pkgconfig files
-                  if (Test-Path "$dep_src\lib\pkgconfig") {
-                      Copy-Item -Path "$dep_src\lib\pkgconfig\*" -Destination "$dir\lib\pkgconfig\" -Force
-                  }
-              }
-          }
-
-          Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
-
-      - name: Package shared for ${{ matrix.arch }}
-        if: github.event.inputs.build_type == 'shared' || github.event.inputs.build_type == 'both'
-        shell: pwsh
-        run: |
-          $ver = "${{ steps.version.outputs.version }}"
-          $arch = "${{ matrix.arch }}"
-          $arch_dir = $arch
-          if ($arch -eq "x64_x86") { $arch_dir = "x86" }
-          
-          $dir = "libcurl-${ver}-${arch_dir}-shared"
-          New-Item -ItemType Directory -Path $dir -Force
-          New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\bin" -Force
+          New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
-          New-Item -ItemType Directory -Path "$dir\include\openssl" -Force
-          New-Item -ItemType Directory -Path "$dir\include\curl" -Force
-          New-Item -ItemType Directory -Path "$dir\lib\pkgconfig" -Force
 
-          $triplet = "$arch_dir-windows"
+          # 复制编译好的 libcurl 动态链接库和它对应的 Import 原型库
+          Copy-Item -Path "build\lib\Release\*.dll" -Destination "$dir\bin\" -Force
+          Copy-Item -Path "build\lib\Release\*.lib" -Destination "$dir\lib\" -Force
           
-          # Copy curl files
-          $curl_src = "vcpkg\packages\curl_$triplet"
-          if (Test-Path $curl_src) {
-            # Copy curl DLLs and libs
-            if (Test-Path "$curl_src\bin\*.dll") {
-              Copy-Item -Path "$curl_src\bin\*.dll" -Destination "$dir\bin\" -Force
-            }
-            if (Test-Path "$curl_src\lib\*.lib") {
-              Copy-Item -Path "$curl_src\lib\*.lib" -Destination "$dir\lib\" -Force
-            }
-            Copy-Item -Path "$curl_src\include\curl\*.h" -Destination "$dir\include\curl\" -Force
-            if (Test-Path "$curl_src\lib\pkgconfig") {
-              Copy-Item -Path "$curl_src\lib\pkgconfig\*" -Destination "$dir\lib\pkgconfig\" -Force
-            }
+          # 重命名以便使用者明确这是 import 库（CMake 默认可能输出 libcurl.lib，将其重命名为 libcurl_imp.lib）
+          if (Test-Path "$dir\lib\libcurl.lib") {
+            Rename-Item -Path "$dir\lib\libcurl.lib" -NewName "libcurl_imp.lib"
           }
 
-          # Copy OpenSSL headers and libraries
-          $openssl_src = "vcpkg\packages\openssl_$triplet"
-          if (Test-Path $openssl_src) {
-            # Copy OpenSSL headers
-            if (Test-Path "$openssl_src\include\openssl") {
-              Copy-Item -Path "$openssl_src\include\openssl\*.h" -Destination "$dir\include\openssl\" -Force
-            }
-            # Copy OpenSSL DLLs and import libs
-            if (Test-Path "$openssl_src\bin\*.dll") {
-              Copy-Item -Path "$openssl_src\bin\*.dll" -Destination "$dir\bin\" -Force
-            }
-            if (Test-Path "$openssl_src\lib\*.lib") {
-              Copy-Item -Path "$openssl_src\lib\*.lib" -Destination "$dir\lib\" -Force
-            }
-          }
+          # 复制 include 头文件
+          Copy-Item -Path "include\curl\*" -Destination "$dir\include\" -Recurse -Force
 
-          # Copy all other dependency DLLs and libs
-          $dependencies = @(
-            @{name="libssh2"; headers=$true},
-            @{name="nghttp2"; headers=$true},
-            @{name="psl"; headers=$true},
-            @{name="zlib"; headers=$true}
-          )
-          
-          foreach ($dep in $dependencies) {
-              $dep_src = "vcpkg\packages\$($dep.name)_$triplet"
-              if (Test-Path $dep_src) {
-                  # Copy DLLs
-                  if (Test-Path "$dep_src\bin\*.dll") {
-                      Copy-Item -Path "$dep_src\bin\*.dll" -Destination "$dir\bin\" -Force
-                  }
-                  # Copy import libraries
-                  if (Test-Path "$dep_src\lib\*.lib") {
-                      Copy-Item -Path "$dep_src\lib\*.lib" -Destination "$dir\lib\" -Force
-                  }
-                  # Copy headers if they exist
-                  if ($dep.headers -and (Test-Path "$dep_src\include")) {
-                      $dep_include_dir = "$dir\include\$($dep.name)"
-                      New-Item -ItemType Directory -Path $dep_include_dir -Force -ErrorAction SilentlyContinue
-                      Copy-Item -Path "$dep_src\include\*" -Destination $dep_include_dir -Recurse -Force
-                  }
-                  # Copy pkgconfig files
-                  if (Test-Path "$dep_src\lib\pkgconfig") {
-                      Copy-Item -Path "$dep_src\lib\pkgconfig\*" -Destination "$dir\lib\pkgconfig\" -Force
-                  }
+          # 提取打包依赖项的静态 .lib 文件（如要求）
+          $vcpkg_libs = "$env:VCPKG_INSTALLATION_ROOT\packages"
+          $deps = @("openssl", "zlib", "libssh2", "nghttp2", "c-ares", "msh3")
+          foreach ($lib in $deps) {
+              $src = "$vcpkg_libs\${lib}_x64-windows-static-md\lib"
+              if (Test-Path $src) {
+                  Copy-Item -Path "$src\*.lib" -Destination "$dir\lib\" -Force
               }
           }
 
-          Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
-
-      - name: Upload static for ${{ matrix.arch }}
-        if: github.event.inputs.build_type == 'static' || github.event.inputs.build_type == 'both'
-        uses: actions/upload-artifact@v4
-        with:
-          name: libcurl-${{ matrix.arch }}-static
-          path: libcurl-*-static.zip
-
-      - name: Upload shared for ${{ matrix.arch }}
-        if: github.event.inputs.build_type == 'shared' || github.event.inputs.build_type == 'both'
-        uses: actions/upload-artifact@v4
-        with:
-          name: libcurl-${{ matrix.arch }}-shared
-          path: libcurl-*-shared.zip
-
-  update-readme:
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Get version
-        id: version
-        run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Update README.md
-        run: |
-          # 创建新的README内容
-          cat > README_NEW.md << 'EOF'
-          # libcurl for MSVC
-
-          Pre-built libcurl binaries for Windows with MSVC.
-
-          ## Version ${{ steps.version.outputs.version }}
-
-          [![Download libcurl ${{ steps.version.outputs.version }}](https://img.shields.io/github/v/release/${{ github.repository }}?include_prereleases&label=latest%20release)](https://github.com/${{ github.repository }}/releases/latest)
-
-          ## Features
-          - OpenSSL support (TLS 1.3)
-          - SSH support (libssh2)
-          - HTTP/2 support (nghttp2)
-          - Public Suffix List (PSL)
-          - zlib compression
-
-          ## Architectures
-          - x64 (64-bit)
-          - x86 (32-bit)
-
-          ## Library Files
-          | Library | Static | Shared (DLL) | Headers Location |
-          |---------|--------|--------------|------------------|
-          | libcurl | libcurl.lib | libcurl.dll + libcurl_imp.lib | include/curl/ |
-          | OpenSSL | libssl.lib, libcrypto.lib | libssl.dll, libcrypto.dll | include/openssl/ |
-          | libssh2 | libssh2.lib | libssh2.dll | include/libssh2/ |
-          | nghttp2 | nghttp2.lib | nghttp2.dll | include/nghttp2/ |
-          | libpsl | psllib.lib | psl.dll | include/psl/ |
-          | zlib | zlib.lib | zlib.dll | include/zlib/ |
-
-          ## System Libraries Required (for static linking)
-          - ws2_32.lib
+          # 添加系统级 Windows 依赖库的说明文件，方便最终调用
+          $ReadmeContent = @"
+          ## Required System Libraries
+          When linking dynamically to libcurl_imp.lib, you must link:
           - crypt32.lib
+          - ws2_32.lib
+          - wldap32.lib
+          - advapi32.lib
           - bcrypt.lib
           - user32.lib
-          - advapi32.lib
-          - gdi32.lib
+          "@
+          Out-File -FilePath "$dir\README.md" -InputObject $ReadmeContent -Encoding UTF8
 
-          ## Build Configurations
+          # 压缩打包
+          Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
 
-          ### Static Build
-          ```cmake
-          # CMake example
-          target_include_directories(your_target PRIVATE 
-              ${CMAKE_CURRENT_SOURCE_DIR}/include
-          )
-          
-          target_link_libraries(your_target
-              libcurl
-              libssl
-              libcrypto
-              libssh2
-              nghttp2
-              psllib
-              zlib
-              ws2_32
-              crypt32
-              bcrypt
-              user32
-              advapi32
-              gdi32
-          )
-          target_compile_definitions(your_target PRIVATE CURL_STATICLIB)
-          ```
-
-          ### Dynamic Build
-          ```cmake
-          # CMake example
-          target_include_directories(your_target PRIVATE 
-              ${CMAKE_CURRENT_SOURCE_DIR}/include
-          )
-          
-          target_link_libraries(your_target libcurl_imp)
-          
-          # Copy all DLLs from bin/ to your executable directory
-          add_custom_command(TARGET your_target POST_BUILD
-              COMMAND ${CMAKE_COMMAND} -E copy_directory
-              ${CMAKE_CURRENT_SOURCE_DIR}/bin $<TARGET_FILE_DIR:your_target>
-          )
-          ```
-
-          ## Downloads
-
-          ### Release Assets
-
-          | Architecture | Static | Shared |
-          |--------------|--------|--------|
-          EOF
-
-          # 创建表格行
-          declare -A static_files
-          declare -A shared_files
-          
-          for file in artifacts/*.zip; do
-            if [[ -f "$file" ]]; then
-              name=$(basename "$file")
-              if [[ "$name" == *"-static.zip" ]]; then
-                arch=$(echo "$name" | sed -E 's/libcurl-[0-9.]+-([^-]+)-static\.zip/\1/')
-                static_files[$arch]="[$name]($name)"
-              elif [[ "$name" == *"-shared.zip" ]]; then
-                arch=$(echo "$name" | sed -E 's/libcurl-[0-9.]+-([^-]+)-shared\.zip/\1/')
-                shared_files[$arch]="[$name]($name)"
-              fi
-            fi
-          done
-
-          # 输出表格行
-          for arch in "x64" "x86"; do
-            static_link=${static_files[$arch]:-"Not available"}
-            shared_link=${shared_files[$arch]:-"Not available"}
-            echo "| $arch | $static_link | $shared_link |" >> README_NEW.md
-          done
-
-          cat >> README_NEW.md << 'EOF'
-
-          ## Usage Notes
-
-          1. **Include Headers**: Add the appropriate include subdirectories to your compiler's include path
-          2. **Static Build**: Link all .lib files and define `CURL_STATICLIB`
-          3. **Dynamic Build**: Link libcurl_imp.lib and ensure all DLLs are in the same directory as your executable
-          4. **OpenSSL Headers**: Located in include/openssl/ for cryptographic functions
-
-          ## Include Structure
-
-          When you extract the package, you will find the following include directory structure:
-
-          ```
-          include/
-          ├── curl/
-          │   ├── curl.h
-          │   ├── curlver.h
-          │   ├── easy.h
-          │   ├── multi.h
-          │   ├── options.h
-          │   ├── stdcheaders.h
-          │   ├── system.h
-          │   └── urlapi.h
-          ├── openssl/
-          │   ├── ssl.h
-          │   ├── ssl3.h
-          │   ├── tls1.h
-          │   ├── crypto.h
-          │   ├── bio.h
-          │   ├── err.h
-          │   ├── rand.h
-          │   ├── pem.h
-          │   ├── x509.h
-          │   ├── x509v3.h
-          │   ├── evp.h
-          │   ├── asn1.h
-          │   ├── objects.h
-          │   ├── ocsp.h
-          │   ├── ui.h
-          │   └── ... (additional OpenSSL headers)
-          ├── libssh2/
-          │   └── libssh2.h
-          ├── nghttp2/
-          │   └── nghttp2.h
-          ├── psl/
-          │   └── libpsl.h
-          └── zlib/
-              ├── zlib.h
-              └── zconf.h
-          ```
-
-          ## Building with vcpkg
-
-          If you prefer to build locally with vcpkg:
-
-          ```bash
-          vcpkg install curl[openssl,ssh,http2,psl]:x64-windows
-          vcpkg install curl[openssl,ssh,http2,psl]:x86-windows
-          ```
-          EOF
-
-          # 替换README
-          mv README_NEW.md README.md
-
-      - name: Commit README update
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add README.md
-          git commit -m "Update README for version ${{ steps.version.outputs.version }}" || exit 0
-          git push
-
-  release:
-    needs: [build, update-readme]
-    runs-on: ubuntu-latest
-    if: |
-      startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Get version
-        id: version
-        run: |
-          if [[ "${{ github.ref }}" =~ ^refs/tags/v(.*)$ ]]; then
-            VERSION="${BASH_REMATCH[1]}"
-          else
-            VERSION="8.18.0"
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Prepare release notes
-        run: |
-          cat > release_notes.md << EOF
-          ## libcurl ${{ steps.version.outputs.version }} for MSVC
-
-          ### Features
-          - OpenSSL support (TLS 1.3)
-          - SSH support (libssh2)
-          - HTTP/2 support (nghttp2)
-          - Public Suffix List (PSL)
-          - zlib compression
-
-          ### Included Libraries and Headers
-          | Library | Files | Headers |
-          |---------|-------|---------|
-          | **libcurl** | libcurl.lib (static), libcurl.dll + libcurl_imp.lib (shared) | include/curl/ |
-          | **OpenSSL** | libssl.lib, libcrypto.lib (static), libssl.dll, libcrypto.dll (shared) | include/openssl/ |
-          | **libssh2** | libssh2.lib (static), libssh2.dll (shared) | include/libssh2/ |
-          | **nghttp2** | nghttp2.lib (static), nghttp2.dll (shared) | include/nghttp2/ |
-          | **libpsl** | psllib.lib (static), psl.dll (shared) | include/psl/ |
-          | **zlib** | zlib.lib (static), zlib.dll (shared) | include/zlib/ |
-
-          ### Link Libraries (Static)
-
-          ```
-          libcurl.lib
-          libssl.lib
-          libcrypto.lib
-          libssh2.lib
-          nghttp2.lib
-          psllib.lib
-          zlib.lib
-          ws2_32.lib
-          crypt32.lib
-          bcrypt.lib
-          user32.lib
-          advapi32.lib
-          gdi32.lib
-          ```
-
-          ### Link Libraries (Dynamic)
-          - Import lib: libcurl_imp.lib
-          - Required DLLs in bin/
-
-          ### Build with CMake
-          ```cmake
-          # Include headers
-          target_include_directories(your_target PRIVATE 
-              \${CMAKE_CURRENT_SOURCE_DIR}/include
-          )
-
-          # Static
-          add_definitions(-DCURL_STATICLIB)
-          target_link_libraries(your_target 
-              libcurl libssl libcrypto libssh2 nghttp2 psllib zlib
-              ws2_32 crypt32 bcrypt user32 advapi32 gdi32)
-
-          # Dynamic
-          target_link_libraries(your_target libcurl_imp)
-          
-          # Copy DLLs (for dynamic build)
-          add_custom_command(TARGET your_target POST_BUILD
-              COMMAND \${CMAKE_COMMAND} -E copy_directory
-              \${CMAKE_CURRENT_SOURCE_DIR}/bin \$<TARGET_FILE_DIR:your_target>
-          )
-          ```
-
-          ### Visual Studio Version
-          Built with Visual Studio 2022 (v143)
-
-          ### Include Structure
-          When you extract the package, you will find the following include directory structure:
-
-          ```
-          include/
-          ├── curl/
-          │   ├── curl.h
-          │   ├── curlver.h
-          │   ├── easy.h
-          │   ├── multi.h
-          │   ├── options.h
-          │   ├── stdcheaders.h
-          │   ├── system.h
-          │   └── urlapi.h
-          ├── openssl/
-          │   ├── ssl.h
-          │   ├── ssl3.h
-          │   ├── tls1.h
-          │   ├── crypto.h
-          │   ├── bio.h
-          │   ├── err.h
-          │   ├── rand.h
-          │   ├── pem.h
-          │   ├── x509.h
-          │   ├── x509v3.h
-          │   ├── evp.h
-          │   ├── asn1.h
-          │   ├── objects.h
-          │   ├── ocsp.h
-          │   ├── ui.h
-          │   ├── engine.h
-          │   └── ... (additional OpenSSL headers)
-          ├── libssh2/
-          │   ├── libssh2.h
-          │   └── libssh2_sftp.h
-          ├── nghttp2/
-          │   └── nghttp2.h
-          ├── psl/
-          │   └── libpsl.h
-          └── zlib/
-              ├── zlib.h
-              └── zconf.h
-          ```
-
-          ### Important Notes
-          - **CURL_STATICLIB** must be defined when using static linking
-          - For dynamic linking, ensure all DLLs are in your PATH or executable directory
-          - OpenSSL headers include both SSL/TLS and crypto functionality
-          - libssh2 headers include SFTP support
-          EOF
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: libcurl ${{ github.ref_name }} for MSVC
-          tag_name: ${{ github.ref_name }}
-          body_path: release_notes.md
-          files: |
-            artifacts/*.zip
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with: 
+          name: libcurl-vc18-x64-mixed-build
+          path: libcurl-vc18-x64-release-dll-ssl-static-cares-static-zlib-static-ssh2-static-ipv6-sspi-nghttp2-static-msh3-static.zip
