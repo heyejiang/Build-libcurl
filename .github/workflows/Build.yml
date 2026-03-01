@@ -13,7 +13,6 @@ jobs:
   build: 
     runs-on: windows-latest
     
-    # 修复了 JSON 解析问题，直接显式指定架构避免复杂字符串造成的运行时错误
     strategy: 
       matrix: 
         arch: [x64]
@@ -33,14 +32,11 @@ jobs:
       - name: Install static dependencies via vcpkg
         shell: pwsh
         run: | 
-          # 使用 static-md 包类型：依赖库编译为静态文件，关联多线程动态运行时 DLL
-          # 这是“动态编译 libcurl，同时把相关组件静态打包进 dll 中”的唯一正确做法
           vcpkg install openssl c-ares zlib libssh2 nghttp2 msh3 --triplet x64-windows-static-md
 
       - name: Configure CMake for Mixed Linkage
         shell: pwsh
         run: | 
-          # 配置 CMake
           cmake -B build -G "Visual Studio 17 2022" -A ${{ matrix.arch }} `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET="x64-windows-static-md" `
@@ -53,7 +49,8 @@ jobs:
             -DENABLE_IPV6=ON `
             -DUSE_WINDOWS_SSPI=ON `
             -DUSE_NGHTTP2=ON `
-            -DUSE_MSH3=ON
+            -DUSE_MSH3=ON `
+            -DCURL_USE_LIBPSL=OFF           # 禁用 libpsl（未安装）
 
       - name: Build libcurl
         shell: pwsh
@@ -63,26 +60,21 @@ jobs:
       - name: Collect and Package Artifacts
         shell: pwsh
         run: | 
-          # 按照你要求的名称创建归档文件夹
           $dir = "libcurl-vc18-x64-release-dll-ssl-static-cares-static-zlib-static-ssh2-static-ipv6-sspi-nghttp2-static-msh3-static"
           New-Item -ItemType Directory -Path $dir -Force
           New-Item -ItemType Directory -Path "$dir\bin" -Force
           New-Item -ItemType Directory -Path "$dir\lib" -Force
           New-Item -ItemType Directory -Path "$dir\include" -Force
 
-          # 复制编译好的 libcurl 动态链接库和它对应的 Import 原型库
           Copy-Item -Path "build\lib\Release\*.dll" -Destination "$dir\bin\" -Force
           Copy-Item -Path "build\lib\Release\*.lib" -Destination "$dir\lib\" -Force
           
-          # 重命名以便使用者明确这是 import 库（CMake 默认可能输出 libcurl.lib，将其重命名为 libcurl_imp.lib）
           if (Test-Path "$dir\lib\libcurl.lib") {
             Rename-Item -Path "$dir\lib\libcurl.lib" -NewName "libcurl_imp.lib"
           }
 
-          # 复制 include 头文件
           Copy-Item -Path "include\curl\*" -Destination "$dir\include\" -Recurse -Force
 
-          # 提取打包依赖项的静态 .lib 文件（如要求）
           $vcpkg_libs = "$env:VCPKG_INSTALLATION_ROOT\packages"
           $deps = @("openssl", "zlib", "libssh2", "nghttp2", "c-ares", "msh3")
           foreach ($lib in $deps) {
@@ -92,7 +84,6 @@ jobs:
               }
           }
 
-          # 添加系统级 Windows 依赖库的说明文件，方便最终调用
           $ReadmeContent = @"
           ## Required System Libraries
           When linking dynamically to libcurl_imp.lib, you must link:
@@ -105,7 +96,6 @@ jobs:
           "@
           Out-File -FilePath "$dir\README.md" -InputObject $ReadmeContent -Encoding UTF8
 
-          # 压缩打包
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip" -Force
 
       - name: Upload Artifact
